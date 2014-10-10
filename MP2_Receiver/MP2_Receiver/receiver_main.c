@@ -12,8 +12,11 @@
 #include <signal.h>
 
 #define PORTLEN 6
-#define MSS 500000
+#define MSS 1472
 #define HEADLEN 12
+#define MAXBODY MSS - HEADLEN
+#define SEQRANGE 1048577 //2^20 + 1 Range
+
 
 struct head{
     int seqNum;
@@ -23,6 +26,13 @@ struct head{
     unsigned syn:1;
     unsigned fin:1;
 };
+
+void makeACK(char* packet, int ackNum){
+    struct head ack;
+    ack.ackNum = ackNum;
+    ack.ack = 1;
+    memcpy(packet, &ack, HEADLEN);
+}
 
 struct head* getHead(void *packet){
     return (struct head*)packet;
@@ -103,7 +113,9 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     socklen_t addr_len;
     struct head* h;
     char* body;
-    
+    int ackNum = 0; // temporarily
+    char ackPak[HEADLEN];
+    char s[INET6_ADDRSTRLEN];
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
         exit(1);
@@ -113,16 +125,27 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         exit(1);
     }
     
+    addr_len = sizeof their_addr;
     while (1) {
         if ((num = recvfrom(socket, buf, MSS, 0,
                             (struct sockaddr *)&their_addr, &addr_len)) > 0) {
+            //Can improve by handling several senders
             buf[num] = '\0';
-            total += num;
             h = getHead(buf);
             body = getBody(buf);
-            printf("%s\n",body);
+            if(h->seqNum == ackNum){ //Correct Packet
+                ackNum = (ackNum + num - HEADLEN) % SEQRANGE;
+                total += num - HEADLEN;
+                printf("%s\n",body);
+                fprintf(fp, "%s", body);
+                makeACK(ackPak,ackNum);
+                if (sendto(socket, ackPak, HEADLEN, 0,
+                           (struct sockaddr *)&their_addr, addr_len) == -1){
+                    perror("Send ACK Failed.\n");
+                    exit(1);
+                }
+            }
             printf("%ld\n",total);
-            fprintf(fp, "%s", body);
         } else if (num == -1){
             perror("Receive Error.\n");
             break;
