@@ -50,9 +50,13 @@ void makePacket(int _seqNum, int _ackNum, short _rwnd, unsigned _ack, unsigned _
     //return HEADLEN;
 }
 
-//void makeDataPacket(int _seqNum, int _ackNum, short _rwnd, void* packet){
-//    makePacket(_seqNum, _ackNum, _rwnd, 0, 0, 0, packet);
-//}
+void makeFinPacket(void* packet){
+    makePacket(0, 0, 0, 0, 0, 1, packet);
+}
+
+void makeACKFinPacket(void* packet){
+    makePacket(0, 0, 0, 1, 0, 1, packet);
+}
 
 void makeDataPacket(const struct swnd sw, void* packet){
     makePacket(sw.newSeq, 0, 0, 0, 0, 0, packet);
@@ -149,6 +153,41 @@ void shrinkWndSize(struct swnd* s){
     s->wndRear = (s->wndRear - curSize / 2) % BUFSIZE;
 }
 
+void terminate(int socket,struct addrinfo servInfo){
+    char packet[HEADLEN];
+    struct head *h;
+    struct sockaddr_storage their_addr;
+    socklen_t addr_len = sizeof their_addr;
+    
+    makeFinPacket(packet);
+    if (sendto(socket, packet, HEADLEN, 0,
+               servInfo.ai_addr, servInfo.ai_addrlen) == -1){
+        perror("Send Fin Failed.\n");
+        exit(1);
+    }
+    
+    //Until terminate or timeout
+    //timeout to add
+    while (1) {
+        if (recvfrom(socket, packet, MSS, 0,
+                                (struct sockaddr *)&their_addr, &addr_len) == -1) {
+            perror("Receive Error.\n");
+            exit(1);
+        } else{
+            h = (struct head*)packet;
+            if (h->fin == 1 && h->ack == 1) {
+                makeACKFinPacket(packet);
+                if (sendto(socket, packet, HEADLEN, 0,
+                           servInfo.ai_addr, servInfo.ai_addrlen) == -1){
+                    perror("Send ACKFin Failed.\n");
+                    exit(1);
+                }
+                break;
+            }
+        }
+    }
+}
+
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -238,6 +277,7 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     
     // Temporarily
     sw.unusedWnd = 20;
+    sw.newSeq = 0;// Assume the first seq is always 0. Can be improved
     
     ch = fgetc(fp);
     while(ch != EOF || totalSent < contentLen){
@@ -255,6 +295,9 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     }
     
     printf("Sent %d Bytes.\n", totalSent);
+    
+    //Terminate the transimission
+    terminate(socket, servInfo);
     
     //Clean
     //free(content);

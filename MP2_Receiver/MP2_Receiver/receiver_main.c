@@ -27,11 +27,30 @@ struct head{
     unsigned fin:1;
 };
 
+void makePacket(int _seqNum, int _ackNum, short _rwnd, unsigned _ack, unsigned _syn, unsigned _fin, void* packet){
+    
+    struct head h;
+    h.seqNum = _seqNum;
+    h.ackNum = _ackNum;
+    h.rwnd =  _rwnd;
+    h.ack =  _ack;
+    h.syn = _syn;
+    h.fin = _fin;
+    
+    memcpy(packet, &h, HEADLEN);
+    
+    //return HEADLEN;
+}
+
 void makeACK(char* packet, int ackNum){
     struct head ack;
     ack.ackNum = ackNum;
     ack.ack = 1;
     memcpy(packet, &ack, HEADLEN);
+}
+
+void makeACKFinPacket(void* packet){
+    makePacket(0, 0, 0, 1, 0, 1, packet);
 }
 
 struct head* getHead(void *packet){
@@ -40,6 +59,33 @@ struct head* getHead(void *packet){
 
 char* getBody(void *packet){
     return (char*)(packet + HEADLEN);
+}
+
+void terminate(int socket, struct sockaddr_storage their_addr, socklen_t addr_len){
+    char packet[HEADLEN];
+    struct head *h;
+    makeACKFinPacket(packet);
+    
+    //Util receive ACKFin or timeout
+    //timout to add
+    while (1) {
+        if (sendto(socket, packet, HEADLEN, 0,
+                   (struct sockaddr *)&their_addr, addr_len) == -1) {
+            perror("Send ACKFin Failed.");
+            exit(1);
+        } else {
+            if(recvfrom(socket, packet, HEADLEN, 0,
+                        (struct sockaddr *)&their_addr, &addr_len) == -1){
+                perror("Receive ACKFin Failed.");
+                exit(1);
+            } else {
+                h = (struct head*)packet;
+                if (h->fin == 1 && h->ack == 1) {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // get sockaddr, IPv4 or IPv6:
@@ -113,7 +159,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     socklen_t addr_len;
     struct head* h;
     char* body;
-    int ackNum = 0; // temporarily
+    int ackNum = 0; // Assume the first seq is always 0. Can be improved
     char ackPak[HEADLEN];
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
@@ -132,6 +178,14 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
             buf[num] = '\0';
             h = getHead(buf);
             body = getBody(buf);
+            
+            //is FinPacket?
+            if (h->fin == 1) {
+                terminate(socket, their_addr, addr_len);
+                break;
+            }
+            
+            //dataPacket
             if(h->seqNum == ackNum){ //Correct Packet
                 ackNum = (ackNum + num - HEADLEN) % SEQRANGE;
                 total += num - HEADLEN;
@@ -153,7 +207,8 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         }
     }
     
-    free(buf);
+    //clean
+    //free(buf);
     fclose(fp);
     close(socket);
 }
