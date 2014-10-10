@@ -115,7 +115,6 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     char* body;
     int ackNum = 0; // temporarily
     char ackPak[HEADLEN];
-    char s[INET6_ADDRSTRLEN];
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
         exit(1);

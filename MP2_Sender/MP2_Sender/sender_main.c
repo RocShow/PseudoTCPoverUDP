@@ -29,7 +29,7 @@ struct swnd{
     //wndSize + 1 == base means the buffer is full.
     int base;
     int newSeq;
-    int wndRear;
+    int wndRear; //wndRear can never exceed bufRear
     int bufRear;
     int unusedWnd; //handle the situation that no enough data to fill the window
     char buf[BUFSIZE];
@@ -58,6 +58,14 @@ void makeDataPacket(const struct swnd sw, void* packet){
     makePacket(sw.newSeq, 0, 0, 0, 0, 0, packet);
 }
 
+struct head* getHead(void *packet){
+    return (struct head*)packet;
+}
+
+char* getBody(void *packet){
+    return (char*)(packet + HEADLEN);
+}
+
 //sliding window operations
 int fillData(struct swnd* s, char data){
     if (((s->bufRear + 1) % BUFSIZE) != s->base) { //not full
@@ -66,7 +74,7 @@ int fillData(struct swnd* s, char data){
         //efficiency can be improved by fill chunk of data together
         s->buf[s->bufRear] = data;
         s->bufRear = (s->bufRear + 1) % BUFSIZE;
-        while(s->unusedWnd > 0){
+        if(s->unusedWnd > 0){
             s->wndRear++;
             s->unusedWnd--;
         }
@@ -117,7 +125,7 @@ void rcvACK(struct swnd* s, struct head h){
         int steps = (ackNum - s->base) % BUFSIZE;
         s->base = ackNum;
         //Move the window forward
-        if ((s->wndRear + steps) % BUFSIZE > s->bufRear){
+        if ((s->wndRear + steps) % BUFSIZE > s->bufRear){ //wndRear can never exceed bufRear
             s->unusedWnd = s->unusedWnd + steps - (s->bufRear - s->wndRear) % BUFSIZE;
             s->wndRear = s->bufRear;
         } else {
@@ -214,6 +222,9 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     char ch;
     struct addrinfo servInfo;
     struct swnd sw;
+    struct head ackPak;
+    struct sockaddr_storage their_addr;
+    socklen_t addr_len = sizeof their_addr;
     
     if ((socket = getSenderSocket(hostname, hostUDPport, &servInfo)) == -1){
         perror("Can't Create Socket\n");
@@ -226,10 +237,7 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     }
     
     // Temporarily
-    sw.wndRear = 15;
-    struct head ackH;
-    ackH.ackNum = 15;
-    
+    sw.unusedWnd = 20;
     
     ch = fgetc(fp);
     while(ch != EOF || totalSent < contentLen){
@@ -238,7 +246,12 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
             ch = fgetc(fp);
         }
         totalSent += sendPacket(&sw, socket, servInfo);
-        rcvACK(&sw, ackH);
+        if (recvfrom(socket, &ackPak, HEADLEN, 0,
+                     (struct sockaddr*)&their_addr, &addr_len) == -1) {
+            perror("Receive ACK failed.\n");
+            exit(1);
+        }
+        rcvACK(&sw, ackPak);
     }
     
     printf("Sent %d Bytes.\n", totalSent);
