@@ -225,32 +225,6 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
         exit(1);
     }
     
-//    memset(packet, 0, MSS);
-//    
-//    while((ch = fgetc(fp)) != EOF ){
-//        packet[position++] = ch;
-//        if (position > MSS - 1) {
-//            makeDataPacket(sw,packet);
-//            if (sendto(socket, packet, position, 0,
-//                       servInfo.ai_addr, servInfo.ai_addrlen) == -1) {
-//                perror("Send Response Error.");
-//            }
-//            memset(packet,0,MSS);
-//            totalLen += position;
-//            position = HEADLEN;
-//        }
-//    }
-//    
-//    makeDataPacket(sw,packet);
-//    if (position > HEADLEN && sendto(socket, packet, position, 0,
-//               servInfo.ai_addr, servInfo.ai_addrlen) == -1) {
-//        perror("Send Response Error.");
-//    }
-//    
-//    totalLen += position;
-//    
-//    printf("Sent %d", totalLen);
-    
     // Temporarily
     sw.wndRear = 15;
     struct head ackH;
