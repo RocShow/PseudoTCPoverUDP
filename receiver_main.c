@@ -10,9 +10,94 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <time.h>
 
 #define PORTLEN 6
-#define MSS 500000
+#define MSS 1472
+#define HEADLEN 12
+#define MAXBODY MSS - HEADLEN
+#define SEQRANGE 1048577 //2^20 + 1 Range
+
+
+struct head{
+    int seqNum;
+    int ackNum;
+    short rwnd;
+    unsigned ack:1;
+    unsigned syn:1;
+    unsigned fin:1;
+};
+
+void makePacket(int _seqNum, int _ackNum, short _rwnd, unsigned _ack, unsigned _syn, unsigned _fin, void* packet){
+    
+    struct head h;
+    h.seqNum = _seqNum;
+    h.ackNum = _ackNum;
+    h.rwnd =  _rwnd;
+    h.ack =  _ack;
+    h.syn = _syn;
+    h.fin = _fin;
+    
+    memcpy(packet, &h, HEADLEN);
+    
+    //return HEADLEN;
+}
+
+void makeACK(char* packet, int ackNum){
+    struct head ack;
+    ack.ackNum = ackNum;
+    ack.ack = 1;
+    memcpy(packet, &ack, HEADLEN);
+}
+
+void makeACKFinPacket(void* packet){
+    makePacket(0, 0, 0, 1, 0, 1, packet);
+}
+
+struct head* getHead(void *packet){
+    return (struct head*)packet;
+}
+
+char* getBody(void *packet){
+    return (char*)(packet + HEADLEN);
+}
+
+void terminate(int socket, struct sockaddr_storage their_addr, socklen_t addr_len){
+    char packet[HEADLEN];
+    struct head *h;
+    makeACKFinPacket(packet);
+    struct timeval tv;
+    
+    //setSocket Timeout 100ms
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000;
+    if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+        perror("Error");
+    }
+    
+    //Util receive ACKFin or timeout
+    while (1) {
+        if (sendto(socket, packet, HEADLEN, 0,
+                   (struct sockaddr *)&their_addr, addr_len) == -1) {
+            perror("Send ACKFin Failed.");
+            exit(1);
+        } else {
+            if(recvfrom(socket, packet, HEADLEN, 0,
+                        (struct sockaddr *)&their_addr, &addr_len) == -1){
+                if (sendto(socket, packet, HEADLEN, 0,
+                           (struct sockaddr *)&their_addr, addr_len) == -1) {
+                    perror("Send ACKFin Failed.");
+                    exit(1);
+                }
+            } else {
+                h = (struct head*)packet;
+                if (h->fin == 1 && h->ack == 1) {
+                    break;
+                }
+            }
+        }
+    }
+}
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa){
@@ -83,6 +168,10 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     long total;
     struct sockaddr_storage their_addr;
     socklen_t addr_len;
+    struct head* h;
+    char* body;
+    int ackNum = 0; // Assume the first seq is always 0. Can be improved
+    char ackPak[HEADLEN];
     
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
@@ -92,15 +181,46 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         perror("Can't Open File.\n");
         exit(1);
     }
-    
+
+    addr_len = sizeof their_addr;
     while (1) {
         if ((num = recvfrom(socket, buf, MSS, 0,
                             (struct sockaddr *)&their_addr, &addr_len)) > 0) {
+            //Can improve by handling several senders
             buf[num] = '\0';
-            total += num;
-            printf("%s\n",buf);
-            printf("%ld\n",total);
-            fprintf(fp, "%s", buf);
+            h = getHead(buf);
+            body = getBody(buf);
+
+            //is FinPacket?
+            if (h->fin == 1) {
+                terminate(socket, their_addr, addr_len);
+                break;
+            }
+            
+            //dataPacket
+//            int n = rand()%100;
+//            if (n < 20) { //20% probability to lose a packet
+//                continue;
+//            }
+//            clock_t start = clock();
+//            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
+//                
+//            }
+            
+            if(h->seqNum == ackNum){ //Correct Packet
+                ackNum = (ackNum + num - HEADLEN) % SEQRANGE;
+                total += num - HEADLEN;
+                //printf("%s\n",body);
+                fprintf(fp, "%s", body);
+                makeACK(ackPak,ackNum);
+                if (sendto(socket, ackPak, HEADLEN, 0,
+                           (struct sockaddr *)&their_addr, addr_len) == -1){
+                    perror("Send ACK Failed.\n");
+                    exit(1);
+                }
+                printf("%ld\n",total);
+            }
+            
         } else if (num == -1){
             perror("Receive Error.\n");
             break;
@@ -109,7 +229,8 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         }
     }
     
-    free(buf);
+    //clean
+    //free(buf);
     fclose(fp);
     close(socket);
 }

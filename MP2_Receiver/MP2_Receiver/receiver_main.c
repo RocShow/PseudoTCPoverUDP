@@ -10,12 +10,14 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <time.h>
 
 #define PORTLEN 6
 #define MSS 1472
 #define HEADLEN 12
 #define MAXBODY MSS - HEADLEN
 #define SEQRANGE 1048577 //2^20 + 1 Range
+//#define SEQRANGE 1600
 
 
 struct head{
@@ -65,9 +67,16 @@ void terminate(int socket, struct sockaddr_storage their_addr, socklen_t addr_le
     char packet[HEADLEN];
     struct head *h;
     makeACKFinPacket(packet);
+    struct timeval tv;
+    
+    //setSocket Timeout 100ms
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000;
+    if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+        perror("Error");
+    }
     
     //Util receive ACKFin or timeout
-    //timout to add
     while (1) {
         if (sendto(socket, packet, HEADLEN, 0,
                    (struct sockaddr *)&their_addr, addr_len) == -1) {
@@ -76,8 +85,11 @@ void terminate(int socket, struct sockaddr_storage their_addr, socklen_t addr_le
         } else {
             if(recvfrom(socket, packet, HEADLEN, 0,
                         (struct sockaddr *)&their_addr, &addr_len) == -1){
-                perror("Receive ACKFin Failed.");
-                exit(1);
+                if (sendto(socket, packet, HEADLEN, 0,
+                           (struct sockaddr *)&their_addr, addr_len) == -1) {
+                    perror("Send ACKFin Failed.");
+                    exit(1);
+                }
             } else {
                 h = (struct head*)packet;
                 if (h->fin == 1 && h->ack == 1) {
@@ -161,6 +173,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     char* body;
     int ackNum = 0; // Assume the first seq is always 0. Can be improved
     char ackPak[HEADLEN];
+    
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
         exit(1);
@@ -169,7 +182,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         perror("Can't Open File.\n");
         exit(1);
     }
-    
+
     addr_len = sizeof their_addr;
     while (1) {
         if ((num = recvfrom(socket, buf, MSS, 0,
@@ -178,7 +191,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
             buf[num] = '\0';
             h = getHead(buf);
             body = getBody(buf);
-            
+
             //is FinPacket?
             if (h->fin == 1) {
                 terminate(socket, their_addr, addr_len);
@@ -186,10 +199,19 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
             }
             
             //dataPacket
+            int n = rand()%100;
+            if (n < 20) { //20% probability to drop a packet
+                continue;
+            }
+//            clock_t start = clock();
+//            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
+//                
+//            }
+            
             if(h->seqNum == ackNum){ //Correct Packet
-                ackNum = (ackNum + num - HEADLEN) % SEQRANGE;
+                ackNum = (ackNum + num - HEADLEN + SEQRANGE) % SEQRANGE;
                 total += num - HEADLEN;
-                printf("%s\n",body);
+                //printf("%s\n",body);
                 fprintf(fp, "%s", body);
                 makeACK(ackPak,ackNum);
                 if (sendto(socket, ackPak, HEADLEN, 0,
@@ -197,8 +219,16 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
                     perror("Send ACK Failed.\n");
                     exit(1);
                 }
+                printf("%ld\n",total);
+            } else {
+                printf("duplicate\n");
+                if (sendto(socket, ackPak, HEADLEN, 0,
+                           (struct sockaddr *)&their_addr, addr_len) == -1){
+                    perror("Send ACK Failed.\n");
+                    exit(1);
+                }
             }
-            printf("%ld\n",total);
+            
         } else if (num == -1){
             perror("Receive Error.\n");
             break;

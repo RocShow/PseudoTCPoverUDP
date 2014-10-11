@@ -8,12 +8,31 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <time.h>
 
 #define PORTLEN 6
 #define MSS 1472
 #define HEADLEN 12
 #define MAXBODY MSS - HEADLEN
-#define BUFSIZE 1048577 //1MB Buffer
+#define BUFSIZE 102401 //0.1MB Buffer
+//#define BUFSIZE 1600 //0.1MB Buffer
+#define TIMEOUT 25
+
+clock_t start;
+
+void startTimer(){
+    start = clock();
+}
+
+int getTime(){
+    clock_t now = clock() - start;
+    clock_t msec = now * 1000 / CLOCKS_PER_SEC;
+    return (int)msec;
+}
+
+int isTimeOut(clock_t end){ //unit of threshold is millisecond
+    return getTime() - start > end ? 1 : 0;
+}
 
 struct head{
     int seqNum;
@@ -33,6 +52,11 @@ struct swnd{
     int bufRear;
     int unusedWnd; //handle the situation that no enough data to fill the window
     char buf[BUFSIZE];
+    int timers[BUFSIZE];
+//    int timerMap[BUFSIZE];
+//    int curTimer;
+//    int timerRear;
+    int timerStarted;
 };
 
 void makePacket(int _seqNum, int _ackNum, short _rwnd, unsigned _ack, unsigned _syn, unsigned _fin, void* packet){
@@ -62,6 +86,10 @@ void makeDataPacket(const struct swnd sw, void* packet){
     makePacket(sw.newSeq, 0, 0, 0, 0, 0, packet);
 }
 
+void makeResendDataPacket(int seqNum, void* packet){
+    makePacket(seqNum, 0, 0, 0, 0, 0, packet);
+}
+
 struct head* getHead(void *packet){
     return (struct head*)packet;
 }
@@ -72,12 +100,12 @@ char* getBody(void *packet){
 
 //sliding window operations
 int fillData(struct swnd* s, char data){
-    if (((s->bufRear + 1) % BUFSIZE) != s->base) { //not full
+    if (((s->bufRear + 1 + BUFSIZE) % BUFSIZE) != s->base) { //not full
         //file data
         //printf("Fill Data: %c\n", data);
         //efficiency can be improved by fill chunk of data together
         s->buf[s->bufRear] = data;
-        s->bufRear = (s->bufRear + 1) % BUFSIZE;
+        s->bufRear = (s->bufRear + 1 + BUFSIZE) % BUFSIZE;
         if(s->unusedWnd > 0){
             s->wndRear++;
             s->unusedWnd--;
@@ -93,28 +121,57 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
     if (s->newSeq != s->wndRear) { //can send data
         char packet[MSS];
         memset(packet, 0, MSS);
-        while ((s->wndRear - s->newSeq) % BUFSIZE > MAXBODY) { //can send full size body
+        while ((s->wndRear - s->newSeq + BUFSIZE) % BUFSIZE > MAXBODY) { //can send full size body
             //send
-            memcpy(packet + HEADLEN, s->buf + s->newSeq, MAXBODY); //copy data to packet
+            if (s->newSeq + MAXBODY > BUFSIZE - 1) {
+                int first = BUFSIZE - s->newSeq;
+                memcpy(packet + HEADLEN, s->buf + s->newSeq, first);
+                memcpy(packet + HEADLEN + first, s->buf, MAXBODY - first);
+            } else {
+                memcpy(packet + HEADLEN, s->buf + s->newSeq, MAXBODY);
+            }
             makeDataPacket(*s, packet); //copy head to packet
             if (sendto(socket, packet, MSS, 0,
                         servInfo.ai_addr, servInfo.ai_addrlen) == -1){
                 perror("Send Data Failed.\n");
                 exit(1);
             }
-            s->newSeq = (s->newSeq + MAXBODY) % BUFSIZE;
+            //Set Timer
+            if(s->timerStarted == 0){
+                startTimer();
+                s->timerStarted = 1;
+            }
+            s->timers[s->newSeq] = getTime() + TIMEOUT;
+            
+            s->newSeq = (s->newSeq + MAXBODY + BUFSIZE) % BUFSIZE;
             total += MAXBODY;
         }
         if (s->newSeq != s->wndRear) { //body size is less than MAXBODY
-            int bodySize = (s->wndRear - s->newSeq) % BUFSIZE;
+            int bodySize = (s->wndRear - s->newSeq + BUFSIZE) % BUFSIZE;
             //send
-            memcpy(packet + HEADLEN, s->buf + s->newSeq, bodySize); //copy data to packet
+            
+            //copy data to packet
+            if (s->newSeq + bodySize > BUFSIZE - 1) {
+                int first = BUFSIZE - s->newSeq;
+                memcpy(packet + HEADLEN, s->buf + s->newSeq, first);
+                memcpy(packet + HEADLEN + first, s->buf, bodySize - first);
+            } else {
+                memcpy(packet + HEADLEN, s->buf + s->newSeq, bodySize);
+            }
+            
             makeDataPacket(*s, packet); //copy head to packet
             if (sendto(socket, packet, HEADLEN + bodySize, 0,
                        servInfo.ai_addr, servInfo.ai_addrlen) == -1){
                 perror("Send Data Failed.\n");
                 exit(1);
             }
+            //Set Timer
+            if(s->timerStarted == 0){
+                startTimer();
+                s->timerStarted = 1;
+            }
+            s->timers[s->newSeq] = getTime() + TIMEOUT;
+            
             s->newSeq = s->wndRear;
             total += bodySize;
         }
@@ -123,34 +180,108 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
     return total;
 }
 
-void rcvACK(struct swnd* s, struct head h){
-    int ackNum = h.ackNum;
-    if((ackNum - s->base) % BUFSIZE <= (s->newSeq - s->base) % BUFSIZE){ //Useful ACK
-        int steps = (ackNum - s->base) % BUFSIZE;
-        s->base = ackNum;
-        //Move the window forward
-        if ((s->wndRear + steps) % BUFSIZE > s->bufRear){ //wndRear can never exceed bufRear
-            s->unusedWnd = s->unusedWnd + steps - (s->bufRear - s->wndRear) % BUFSIZE;
-            s->wndRear = s->bufRear;
-        } else {
-            s->wndRear = (s->wndRear + steps) % BUFSIZE;
+int resend(struct swnd* s, int socket, struct addrinfo servInfo){
+    int total = 0;
+    if (s->newSeq != s->base){ //there is data to resend
+        int tempBase = s->base;
+        char packet[MSS];
+        memset(packet, 0, MSS);
+        while ((s->newSeq - tempBase + BUFSIZE) % BUFSIZE > MAXBODY) { //can send full size body
+            //send
+            //copy data to packet
+            if (tempBase + MAXBODY > BUFSIZE - 1) {
+                int first = BUFSIZE - tempBase;
+                memcpy(packet + HEADLEN, s->buf + tempBase, first);
+                memcpy(packet + HEADLEN + first, s->buf, MAXBODY - first);
+            } else {
+                memcpy(packet + HEADLEN, s->buf + tempBase, MAXBODY);
+            }
+            makeResendDataPacket(tempBase, packet); //copy head to packet
+            if (sendto(socket, packet, MSS, 0,
+                       servInfo.ai_addr, servInfo.ai_addrlen) == -1){
+                perror("Resend Data Failed.\n");
+                exit(1);
+            }
+            //Set Timer
+            if(s->timerStarted == 0){
+                startTimer();
+                s->timerStarted = 1;
+            }
+            s->timers[tempBase] = getTime() + TIMEOUT;
+            
+            tempBase = (tempBase + MAXBODY + BUFSIZE) % BUFSIZE;
+            total += MAXBODY;
+        }
+        if (tempBase != s->newSeq) { //body size is less than MAXBODY
+            int bodySize = (s->newSeq - tempBase + BUFSIZE) % BUFSIZE;
+            //send
+            
+            //copy data to packet
+            if (tempBase + bodySize > BUFSIZE - 1) {
+                int first = BUFSIZE - tempBase;
+                memcpy(packet + HEADLEN, s->buf + tempBase, first);
+                memcpy(packet + HEADLEN + first, s->buf, bodySize - first);
+            } else {
+                memcpy(packet + HEADLEN, s->buf + tempBase, bodySize);
+            }
+            
+            makeResendDataPacket(tempBase, packet); //copy head to packet
+            if (sendto(socket, packet, HEADLEN + bodySize, 0,
+                       servInfo.ai_addr, servInfo.ai_addrlen) == -1){
+                perror("Resend Data Failed.\n");
+                exit(1);
+            }
+            //Set Timer
+            if(s->timerStarted == 0){
+                startTimer();
+                s->timerStarted = 1;
+            }
+            s->timers[tempBase] = getTime() + TIMEOUT;
+            
+            //tempBase = s->newSeq;
+            total += bodySize;
         }
     }
+    return total;
+}
+
+int rcvACK(struct swnd* s, struct head h){
+    int ackNum = h.ackNum;
+    if((ackNum - s->base + BUFSIZE) % BUFSIZE <= (s->newSeq - s->base + BUFSIZE) % BUFSIZE){ //Useful ACK
+        int steps = (ackNum - s->base + BUFSIZE) % BUFSIZE;
+        s->base = ackNum;
+        //Move the window forward
+        if ((s->wndRear + steps + BUFSIZE) % BUFSIZE > s->bufRear){ //wndRear can never exceed bufRear
+            s->unusedWnd = s->unusedWnd + steps - (s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE;
+            s->wndRear = s->bufRear;
+        } else {
+            s->wndRear = (s->wndRear + steps + BUFSIZE) % BUFSIZE;
+        }
+        return 1;
+    }
+    
+    //if all ack are received
+    if (s->base == s->newSeq) {
+        //stop timer
+        s->timerStarted = 0;
+    }
+
+    return 0;
     //should fill data after revACK
 }
 
 void extendWndSize(struct swnd* s, int size){
-    if ((s->bufRear - s->wndRear) % BUFSIZE > size) {
-        s->wndRear = (s->wndRear + size) % BUFSIZE;
+    if ((s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE > size) {
+        s->wndRear = (s->wndRear + size + BUFSIZE) % BUFSIZE;
     } else {
-        s->unusedWnd = s->unusedWnd + size - (s->bufRear - s->wndRear) % BUFSIZE;
+        s->unusedWnd = s->unusedWnd + size - (s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE;
         s->wndRear = s->bufRear;
     }
 }
 
 void shrinkWndSize(struct swnd* s){
-    int curSize = (s->wndRear - s->base) % BUFSIZE;
-    s->wndRear = (s->wndRear - curSize / 2) % BUFSIZE;
+    int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE;
+    s->wndRear = (s->wndRear - curSize / 2 + BUFSIZE) % BUFSIZE;
 }
 
 void terminate(int socket,struct addrinfo servInfo){
@@ -158,6 +289,7 @@ void terminate(int socket,struct addrinfo servInfo){
     struct head *h;
     struct sockaddr_storage their_addr;
     socklen_t addr_len = sizeof their_addr;
+    ssize_t recvNum;
     
     makeFinPacket(packet);
     if (sendto(socket, packet, HEADLEN, 0,
@@ -166,14 +298,19 @@ void terminate(int socket,struct addrinfo servInfo){
         exit(1);
     }
     
+    
+    
     //Until terminate or timeout
-    //timeout to add
     while (1) {
-        if (recvfrom(socket, packet, MSS, 0,
-                                (struct sockaddr *)&their_addr, &addr_len) == -1) {
-            perror("Receive Error.\n");
-            exit(1);
-        } else{
+        recvNum = recvfrom(socket, packet, MSS, 0,
+                           (struct sockaddr *)&their_addr, &addr_len);
+        if (recvNum == -1){ //timeout
+            if (sendto(socket, packet, HEADLEN, 0,
+                       servInfo.ai_addr, servInfo.ai_addrlen) == -1){
+                perror("Send Fin Failed.\n");
+                exit(1);
+            }
+        } else {
             h = (struct head*)packet;
             if (h->fin == 1 && h->ack == 1) {
                 makeACKFinPacket(packet);
@@ -264,6 +401,9 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     struct head ackPak;
     struct sockaddr_storage their_addr;
     socklen_t addr_len = sizeof their_addr;
+    struct timeval tv;
+    int lastACK = -1;
+    int sameACK = 0;
     
     if ((socket = getSenderSocket(hostname, hostUDPport, &servInfo)) == -1){
         perror("Can't Create Socket\n");
@@ -275,8 +415,20 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
         exit(1);
     }
     
+    sw.base = 0;
+    sw.newSeq = 0;
+    sw.bufRear = 0;
+    sw.wndRear = 0;
+    
+    //setSocket Timeout 100ms
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000;
+    if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+        perror("Error");
+    }
+    
     // Temporarily
-    sw.unusedWnd = 20;
+    sw.unusedWnd = 500;
     sw.newSeq = 0;// Assume the first seq is always 0. Can be improved
     
     ch = fgetc(fp);
@@ -286,12 +438,26 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
             ch = fgetc(fp);
         }
         totalSent += sendPacket(&sw, socket, servInfo);
-        if (recvfrom(socket, &ackPak, HEADLEN, 0,
-                     (struct sockaddr*)&their_addr, &addr_len) == -1) {
-            perror("Receive ACK failed.\n");
-            exit(1);
-        }
-        rcvACK(&sw, ackPak);
+        
+        do {
+            if (isTimeOut(sw.timers[sw.base]) == 1) {
+                resend(&sw, socket, servInfo);
+                //printf("timeout\n");
+            }
+            if (recvfrom(socket, &ackPak, HEADLEN, 0,
+                         (struct sockaddr*)&their_addr, &addr_len) == -1) {
+            }
+            if (lastACK == ackPak.ackNum) {
+                sameACK++;
+                if (sameACK == 4) {
+                    resend(&sw, socket, servInfo);
+                    printf("fast Resend\n");
+                }
+            } else {
+                lastACK = ackPak.ackNum;
+                sameACK = 1;
+            }
+        }while (rcvACK(&sw, ackPak) != 1);
     }
     
     printf("Sent %d Bytes.\n", totalSent);
