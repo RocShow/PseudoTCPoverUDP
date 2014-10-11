@@ -17,6 +17,7 @@
 #define HEADLEN 12
 #define MAXBODY MSS - HEADLEN
 #define SEQRANGE 1048577 //2^20 + 1 Range
+//#define SEQRANGE 1600
 
 
 struct head{
@@ -198,17 +199,17 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
             }
             
             //dataPacket
-//            int n = rand()%100;
-//            if (n < 20) { //20% probability to lose a packet
-//                continue;
-//            }
+            int n = rand()%100;
+            if (n < 20) { //20% probability to drop a packet
+                continue;
+            }
 //            clock_t start = clock();
 //            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
 //                
 //            }
             
             if(h->seqNum == ackNum){ //Correct Packet
-                ackNum = (ackNum + num - HEADLEN) % SEQRANGE;
+                ackNum = (ackNum + num - HEADLEN + SEQRANGE) % SEQRANGE;
                 total += num - HEADLEN;
                 //printf("%s\n",body);
                 fprintf(fp, "%s", body);
@@ -219,6 +220,13 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
                     exit(1);
                 }
                 printf("%ld\n",total);
+            } else {
+                printf("duplicate\n");
+                if (sendto(socket, ackPak, HEADLEN, 0,
+                           (struct sockaddr *)&their_addr, addr_len) == -1){
+                    perror("Send ACK Failed.\n");
+                    exit(1);
+                }
             }
             
         } else if (num == -1){

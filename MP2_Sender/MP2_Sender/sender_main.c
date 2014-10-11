@@ -181,6 +181,7 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
 }
 
 int resend(struct swnd* s, int socket, struct addrinfo servInfo){
+    printf("resend\n");
     int total = 0;
     if (s->newSeq != s->base){ //there is data to resend
         int tempBase = s->base;
@@ -451,7 +452,7 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
                 sameACK++;
                 if (sameACK == 4) {
                     resend(&sw, socket, servInfo);
-                    printf("fast Resend\n");
+                    //printf("fast Resend\n");
                 }
             } else {
                 lastACK = ackPak.ackNum;

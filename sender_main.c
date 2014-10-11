@@ -15,6 +15,7 @@
 #define HEADLEN 12
 #define MAXBODY MSS - HEADLEN
 #define BUFSIZE 102401 //0.1MB Buffer
+//#define BUFSIZE 1600 //0.1MB Buffer
 #define TIMEOUT 25
 
 clock_t start;
@@ -99,12 +100,12 @@ char* getBody(void *packet){
 
 //sliding window operations
 int fillData(struct swnd* s, char data){
-    if (((s->bufRear + 1) % BUFSIZE) != s->base) { //not full
+    if (((s->bufRear + 1 + BUFSIZE) % BUFSIZE) != s->base) { //not full
         //file data
         //printf("Fill Data: %c\n", data);
         //efficiency can be improved by fill chunk of data together
         s->buf[s->bufRear] = data;
-        s->bufRear = (s->bufRear + 1) % BUFSIZE;
+        s->bufRear = (s->bufRear + 1 + BUFSIZE) % BUFSIZE;
         if(s->unusedWnd > 0){
             s->wndRear++;
             s->unusedWnd--;
@@ -120,9 +121,15 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
     if (s->newSeq != s->wndRear) { //can send data
         char packet[MSS];
         memset(packet, 0, MSS);
-        while ((s->wndRear - s->newSeq) % BUFSIZE > MAXBODY) { //can send full size body
+        while ((s->wndRear - s->newSeq + BUFSIZE) % BUFSIZE > MAXBODY) { //can send full size body
             //send
-            memcpy(packet + HEADLEN, s->buf + s->newSeq, MAXBODY); //copy data to packet
+            if (s->newSeq + MAXBODY > BUFSIZE - 1) {
+                int first = BUFSIZE - s->newSeq;
+                memcpy(packet + HEADLEN, s->buf + s->newSeq, first);
+                memcpy(packet + HEADLEN + first, s->buf, MAXBODY - first);
+            } else {
+                memcpy(packet + HEADLEN, s->buf + s->newSeq, MAXBODY);
+            }
             makeDataPacket(*s, packet); //copy head to packet
             if (sendto(socket, packet, MSS, 0,
                         servInfo.ai_addr, servInfo.ai_addrlen) == -1){
@@ -136,13 +143,22 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
             }
             s->timers[s->newSeq] = getTime() + TIMEOUT;
             
-            s->newSeq = (s->newSeq + MAXBODY) % BUFSIZE;
+            s->newSeq = (s->newSeq + MAXBODY + BUFSIZE) % BUFSIZE;
             total += MAXBODY;
         }
         if (s->newSeq != s->wndRear) { //body size is less than MAXBODY
-            int bodySize = (s->wndRear - s->newSeq) % BUFSIZE;
+            int bodySize = (s->wndRear - s->newSeq + BUFSIZE) % BUFSIZE;
             //send
-            memcpy(packet + HEADLEN, s->buf + s->newSeq, bodySize); //copy data to packet
+            
+            //copy data to packet
+            if (s->newSeq + bodySize > BUFSIZE - 1) {
+                int first = BUFSIZE - s->newSeq;
+                memcpy(packet + HEADLEN, s->buf + s->newSeq, first);
+                memcpy(packet + HEADLEN + first, s->buf, bodySize - first);
+            } else {
+                memcpy(packet + HEADLEN, s->buf + s->newSeq, bodySize);
+            }
+            
             makeDataPacket(*s, packet); //copy head to packet
             if (sendto(socket, packet, HEADLEN + bodySize, 0,
                        servInfo.ai_addr, servInfo.ai_addrlen) == -1){
@@ -165,14 +181,22 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
 }
 
 int resend(struct swnd* s, int socket, struct addrinfo servInfo){
+    printf("resend\n");
     int total = 0;
     if (s->newSeq != s->base){ //there is data to resend
         int tempBase = s->base;
         char packet[MSS];
         memset(packet, 0, MSS);
-        while ((s->newSeq - tempBase) % BUFSIZE > MAXBODY) { //can send full size body
+        while ((s->newSeq - tempBase + BUFSIZE) % BUFSIZE > MAXBODY) { //can send full size body
             //send
-            memcpy(packet + HEADLEN, s->buf + tempBase, MAXBODY); //copy data to packet
+            //copy data to packet
+            if (tempBase + MAXBODY > BUFSIZE - 1) {
+                int first = BUFSIZE - tempBase;
+                memcpy(packet + HEADLEN, s->buf + tempBase, first);
+                memcpy(packet + HEADLEN + first, s->buf, MAXBODY - first);
+            } else {
+                memcpy(packet + HEADLEN, s->buf + tempBase, MAXBODY);
+            }
             makeResendDataPacket(tempBase, packet); //copy head to packet
             if (sendto(socket, packet, MSS, 0,
                        servInfo.ai_addr, servInfo.ai_addrlen) == -1){
@@ -186,13 +210,22 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
             }
             s->timers[tempBase] = getTime() + TIMEOUT;
             
-            tempBase = (tempBase + MAXBODY) % BUFSIZE;
+            tempBase = (tempBase + MAXBODY + BUFSIZE) % BUFSIZE;
             total += MAXBODY;
         }
         if (tempBase != s->newSeq) { //body size is less than MAXBODY
-            int bodySize = (s->newSeq - tempBase) % BUFSIZE;
+            int bodySize = (s->newSeq - tempBase + BUFSIZE) % BUFSIZE;
             //send
-            memcpy(packet + HEADLEN, s->buf + tempBase, bodySize); //copy data to packet
+            
+            //copy data to packet
+            if (tempBase + bodySize > BUFSIZE - 1) {
+                int first = BUFSIZE - tempBase;
+                memcpy(packet + HEADLEN, s->buf + tempBase, first);
+                memcpy(packet + HEADLEN + first, s->buf, bodySize - first);
+            } else {
+                memcpy(packet + HEADLEN, s->buf + tempBase, bodySize);
+            }
+            
             makeResendDataPacket(tempBase, packet); //copy head to packet
             if (sendto(socket, packet, HEADLEN + bodySize, 0,
                        servInfo.ai_addr, servInfo.ai_addrlen) == -1){
@@ -215,15 +248,15 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
 
 int rcvACK(struct swnd* s, struct head h){
     int ackNum = h.ackNum;
-    if((ackNum - s->base) % BUFSIZE <= (s->newSeq - s->base) % BUFSIZE){ //Useful ACK
-        int steps = (ackNum - s->base) % BUFSIZE;
+    if((ackNum - s->base + BUFSIZE) % BUFSIZE <= (s->newSeq - s->base + BUFSIZE) % BUFSIZE){ //Useful ACK
+        int steps = (ackNum - s->base + BUFSIZE) % BUFSIZE;
         s->base = ackNum;
         //Move the window forward
-        if ((s->wndRear + steps) % BUFSIZE > s->bufRear){ //wndRear can never exceed bufRear
-            s->unusedWnd = s->unusedWnd + steps - (s->bufRear - s->wndRear) % BUFSIZE;
+        if ((s->wndRear + steps + BUFSIZE) % BUFSIZE > s->bufRear){ //wndRear can never exceed bufRear
+            s->unusedWnd = s->unusedWnd + steps - (s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE;
             s->wndRear = s->bufRear;
         } else {
-            s->wndRear = (s->wndRear + steps) % BUFSIZE;
+            s->wndRear = (s->wndRear + steps + BUFSIZE) % BUFSIZE;
         }
         return 1;
     }
@@ -233,23 +266,23 @@ int rcvACK(struct swnd* s, struct head h){
         //stop timer
         s->timerStarted = 0;
     }
-    
+
     return 0;
     //should fill data after revACK
 }
 
 void extendWndSize(struct swnd* s, int size){
-    if ((s->bufRear - s->wndRear) % BUFSIZE > size) {
-        s->wndRear = (s->wndRear + size) % BUFSIZE;
+    if ((s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE > size) {
+        s->wndRear = (s->wndRear + size + BUFSIZE) % BUFSIZE;
     } else {
-        s->unusedWnd = s->unusedWnd + size - (s->bufRear - s->wndRear) % BUFSIZE;
+        s->unusedWnd = s->unusedWnd + size - (s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE;
         s->wndRear = s->bufRear;
     }
 }
 
 void shrinkWndSize(struct swnd* s){
-    int curSize = (s->wndRear - s->base) % BUFSIZE;
-    s->wndRear = (s->wndRear - curSize / 2) % BUFSIZE;
+    int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE;
+    s->wndRear = (s->wndRear - curSize / 2 + BUFSIZE) % BUFSIZE;
 }
 
 void terminate(int socket,struct addrinfo servInfo){
@@ -370,6 +403,8 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     struct sockaddr_storage their_addr;
     socklen_t addr_len = sizeof their_addr;
     struct timeval tv;
+    int lastACK = -1;
+    int sameACK = 0;
     
     if ((socket = getSenderSocket(hostname, hostUDPport, &servInfo)) == -1){
         perror("Can't Create Socket\n");
@@ -381,6 +416,11 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
         exit(1);
     }
     
+    sw.base = 0;
+    sw.newSeq = 0;
+    sw.bufRear = 0;
+    sw.wndRear = 0;
+    
     //setSocket Timeout 100ms
     tv.tv_sec = 0;
     tv.tv_usec = 100000;
@@ -389,7 +429,7 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     }
     
     // Temporarily
-    sw.unusedWnd = 100;
+    sw.unusedWnd = 500;
     sw.newSeq = 0;// Assume the first seq is always 0. Can be improved
     
     ch = fgetc(fp);
@@ -401,16 +441,22 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
         totalSent += sendPacket(&sw, socket, servInfo);
         
         do {
-            //fast retransmission to add
             if (isTimeOut(sw.timers[sw.base]) == 1) {
                 resend(&sw, socket, servInfo);
-                printf("timeout\n");
+                //printf("timeout\n");
             }
             if (recvfrom(socket, &ackPak, HEADLEN, 0,
                          (struct sockaddr*)&their_addr, &addr_len) == -1) {
-                //perror("Receive ACK failed.\n");
-                //exit(1);
-                
+            }
+            if (lastACK == ackPak.ackNum) {
+                sameACK++;
+                if (sameACK == 4) {
+                    resend(&sw, socket, servInfo);
+                    //printf("fast Resend\n");
+                }
+            } else {
+                lastACK = ackPak.ackNum;
+                sameACK = 1;
             }
         }while (rcvACK(&sw, ackPak) != 1);
     }
