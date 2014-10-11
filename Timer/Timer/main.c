@@ -31,7 +31,7 @@ int main(){
     int i = 0;
     
 //    while(i<1000000){
-//        printf("%d\n",i++);
+//        printf("%lu\n",getTime());
 //    }
     
     now = clock() - start;
@@ -40,6 +40,6 @@ int main(){
     
     printf("%lu\n",msec);
     //printf("%d\n",CLOCKS_PER_SEC);
-    printf("%d\n",-1%5);
+    printf("%d\n",5%5);
     exit(0);
 }

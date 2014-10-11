@@ -16,7 +16,7 @@
 #define MSS 1472
 #define HEADLEN 12
 #define MAXBODY MSS - HEADLEN
-#define SEQRANGE 1048577 //2^20 + 1 Range
+#define SEQRANGE 1048577 // 1MB Buffer
 //#define SEQRANGE 1600
 
 
@@ -173,6 +173,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     char* body;
     int ackNum = 0; // Assume the first seq is always 0. Can be improved
     char ackPak[HEADLEN];
+    int sameACK = 0;
     
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
@@ -198,17 +199,20 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
                 break;
             }
             
-            //dataPacket
             int n = rand()%100;
             if (n < 20) { //20% probability to drop a packet
+                //printf("drop\n");
                 continue;
             }
-//            clock_t start = clock();
-//            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
-//                
-//            }
+            clock_t start = clock();
+            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
+                //20ms delay
+            }
             
+            //dataPacket
+            //printf("Waiting for: %d, Receive: %d\n",ackNum, h->seqNum);
             if(h->seqNum == ackNum){ //Correct Packet
+                sameACK = 0;
                 ackNum = (ackNum + num - HEADLEN + SEQRANGE) % SEQRANGE;
                 total += num - HEADLEN;
                 //printf("%s\n",body);
@@ -219,13 +223,16 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
                     perror("Send ACK Failed.\n");
                     exit(1);
                 }
-                printf("%ld\n",total);
+                //printf("Receive %ld\n",total);
             } else {
-                printf("duplicate\n");
-                if (sendto(socket, ackPak, HEADLEN, 0,
-                           (struct sockaddr *)&their_addr, addr_len) == -1){
-                    perror("Send ACK Failed.\n");
-                    exit(1);
+                sameACK++;
+                //printf("duplicate %d\n",sameACK);
+                if (sameACK < 6) { //avoid too many same ACK
+                    if (sendto(socket, ackPak, HEADLEN, 0,
+                               (struct sockaddr *)&their_addr, addr_len) == -1){
+                        perror("Send ACK Failed.\n");
+                        exit(1);
+                    }
                 }
             }
             
@@ -241,6 +248,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     //free(buf);
     fclose(fp);
     close(socket);
+    printf("total %ld\n",total);
 }
 
 int main(int argc, char** argv)
