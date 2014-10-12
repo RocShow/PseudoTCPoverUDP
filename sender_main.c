@@ -15,7 +15,7 @@
 #define HEADLEN 12
 #define MAXBODY 1460
 #define BUFSIZE 10485767 // 10MB Buffer
-#define TIMEOUT 25
+#define TIMEOUT 21
 
 typedef enum {SS,CA,FR} swState;
 
@@ -28,6 +28,7 @@ void startTimer(){
 int getTime(){
     clock_t now = clock() - start;
     clock_t msec = now * 1000 / CLOCKS_PER_SEC;
+    //printf("%lu\n",msec);
     return (int)msec;
 }
 
@@ -129,6 +130,11 @@ int getCurWndSize(struct swnd *s){
 }
 
 void extendWndSize(struct swnd* s, int size){
+    int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
+    if(curSize + size >= BUFSIZE / 50){
+        //printf("");
+        return;
+    }
     if ((s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE > size) {
         s->wndRear = (s->wndRear + size + BUFSIZE) % BUFSIZE;
     } else {
@@ -136,10 +142,14 @@ void extendWndSize(struct swnd* s, int size){
         s->wndRear = s->bufRear;
     }
     
-    if ((s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd > s->ssthreshold) {
+    if (s->state == SS & (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd > s->ssthreshold) {
         //wndSize >ssthres
         s->state = CA;
     }
+    
+    
+    //printf("%d\n",curSize);
+
 }
 
 void shrinkWndSize(struct swnd* s){
@@ -273,6 +283,7 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
             total += bodySize;
         }
     }
+    //printf("send:%d\n",total);
     return total;
 }
 
@@ -344,7 +355,10 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
 
 int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
     int ackNum = h.ackNum;
-    //printf("RECEIVE ACK: %d\n", ackNum);
+    //printf("s->base: %d, RECEIVE ACK: %d\n", s->base, ackNum);
+//    if (s->base == ackNum) {
+//        printf(" 1");
+//    }
     //Duplicate ACK
     if (ackNum == s->base && ackNum == s->lastACK) {
         //printf("dup\n");
@@ -384,7 +398,9 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
                 extendWndSize(s, MAXBODY);
                 break;
             case CA:{
-                extendWndSize(s, MAXBODY * (MAXBODY / curWndSize));
+                //Need Improve
+                //extendWndSize(s, MAXBODY);
+                extendWndSize(s, MAXBODY * MAXBODY / curWndSize);
                 break;
             }
             case FR:
@@ -393,7 +409,7 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
             default:
                 break;
         }
-        
+
         int steps = (ackNum - s->base + BUFSIZE) % BUFSIZE;
         s->base = ackNum;
         //Move the window forward
@@ -403,6 +419,7 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
         } else {
             s->wndRear = (s->wndRear + steps + BUFSIZE) % BUFSIZE;
         }
+        
         
         return steps;
     }
@@ -425,6 +442,7 @@ void handleTO(struct swnd *s, int socket, struct addrinfo servInfo){
             s->sameACK = 0;
             s->lastACK = -1;
             s->ssthreshold = curWndSize / 2;
+            //s->ssthreshold = 65535;
             resetWndSize(s);
             break;
         case CA:
@@ -432,6 +450,7 @@ void handleTO(struct swnd *s, int socket, struct addrinfo servInfo){
             s->sameACK = 0;
             s->lastACK = -1;
             s->ssthreshold = curWndSize / 2;
+            //s->ssthreshold = 65535;
             resetWndSize(s);
             s->state = SS;
             break;
@@ -458,7 +477,7 @@ void terminate(int socket,struct addrinfo servInfo){
     startTimer();
     //Until terminate or timeout
     while (1) {
-        if (isTimeOut(100000) == 1) { //1000ms to timeout
+        if (isTimeOut(1000) == 1) { //1000ms to timeout
             printf("FIN timeout. Exit.\n");
             return;
         }
@@ -572,9 +591,9 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
         exit(1);
     }
     
-    //setSocket Timeout 100ms
+    //setSocket Timeout
     tv.tv_sec = 0;
-    tv.tv_usec = 10;
+    tv.tv_usec = 25000;
     if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
         perror("Error");
     }
@@ -590,14 +609,14 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
         
         sendPacket(&sw, socket, servInfo);
         
-        if (isTimeOut(sw.timers[sw.base]) == 1) {
-            handleTO(&sw, socket, servInfo);
-            //resend(&sw, socket, servInfo);
-            //printf("timeout\n");
-        }
+//        if (isTimeOut(sw.timers[sw.base]) == 1) {
+//            handleTO(&sw, socket, servInfo);
+//            //resend(&sw, socket, servInfo);
+//            printf("timeout\n");
+//        }
         if (recvfrom(socket, &ackPak, HEADLEN, 0,
                      (struct sockaddr*)&their_addr, &addr_len) == -1) {
-            //handleTO(&sw, socket, servInfo);
+            handleTO(&sw, socket, servInfo);
             //printf("receive ACK TO\n");
         } else {
             totalSent += rcvACK(&sw, ackPak, socket, servInfo);
