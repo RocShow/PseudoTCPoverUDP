@@ -1,7 +1,7 @@
-all:receiver.o	sender.o
-receiver.o:receiver_main.c
-	gcc receiver_main.c -o receiver.o
-sender.o:sender_main.c
-	gcc sender_main.c -o sender.o
+all:reliable_sender reliable_receiver
+reliable_receiver:receiver_main.c
+	gcc receiver_main.c -o reliable_receiver
+reliable_sender:sender_main.c
+	gcc sender_main.c -o reliable_sender
 clean:
-	rm -f receiver.o sender.o
+	rm -f reliable_sender reliable_receiver

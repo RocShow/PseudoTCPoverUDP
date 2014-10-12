@@ -16,7 +16,7 @@
 #define MSS 1472
 #define HEADLEN 12
 #define MAXBODY MSS - HEADLEN
-#define SEQRANGE 1048577 // 1MB Buffer
+#define SEQRANGE 10485767 // 10MB Buffer
 //#define SEQRANGE 1600
 
 
@@ -179,7 +179,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         perror("Can't Bind Local Port.\n");
         exit(1);
     }
-    if ((fp = fopen("output.txt", "w")) == NULL) {
+    if ((fp = fopen(destinationFile, "wb")) == NULL) {
         perror("Can't Open File.\n");
         exit(1);
     }
@@ -199,15 +199,15 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
                 break;
             }
             
-            int n = rand()%100;
-            if (n < 20) { //20% probability to drop a packet
-                //printf("drop\n");
-                continue;
-            }
-            clock_t start = clock();
-            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
-                //20ms delay
-            }
+//            int n = rand()%100;
+//            if (n < 20) { //20% probability to drop a packet
+//                //printf("drop\n");
+//                continue;
+//            }
+//            clock_t start = clock();
+//            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
+//                //20ms delay
+//            }
             
             //dataPacket
             //printf("Waiting for: %d, Receive: %d\n",ackNum, h->seqNum);
@@ -216,7 +216,8 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
                 ackNum = (ackNum + num - HEADLEN + SEQRANGE) % SEQRANGE;
                 total += num - HEADLEN;
                 //printf("%s\n",body);
-                fprintf(fp, "%s", body);
+                //fprintf(fp, "%s", body);
+                fwrite(body, 1, num - HEADLEN, fp);
                 makeACK(ackPak,ackNum);
                 if (sendto(socket, ackPak, HEADLEN, 0,
                            (struct sockaddr *)&their_addr, addr_len) == -1){

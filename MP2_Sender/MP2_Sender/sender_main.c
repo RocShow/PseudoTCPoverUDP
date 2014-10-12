@@ -14,8 +14,7 @@
 #define MSS 1472
 #define HEADLEN 12
 #define MAXBODY 1460
-#define BUFSIZE 1048577 // 1MB Buffer
-//#define BUFSIZE 1600 //0.1MB Buffer
+#define BUFSIZE 10485767 // 10MB Buffer
 #define TIMEOUT 25
 
 typedef enum {SS,CA,FR} swState;
@@ -23,7 +22,6 @@ typedef enum {SS,CA,FR} swState;
 clock_t start;
 
 void startTimer(){
-    printf("start timers\n");
     start = clock();
 }
 
@@ -132,13 +130,7 @@ int getCurWndSize(struct swnd *s){
 
 void extendWndSize(struct swnd* s, int size){
     if ((s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE > size) {
-        if(s->wndRear > 34657){
-            printf("");
-        }
         s->wndRear = (s->wndRear + size + BUFSIZE) % BUFSIZE;
-        if(s->wndRear > 34657){
-            printf("");
-        }
     } else {
         s->unusedWnd = s->unusedWnd + size - (s->bufRear - s->wndRear + BUFSIZE) % BUFSIZE;
         s->wndRear = s->bufRear;
@@ -178,21 +170,47 @@ void resetWndSize(struct swnd* s){
 }
 
 //sliding window operations
-int fillData(struct swnd* s, char data){
-    if (((s->bufRear + 1 + BUFSIZE) % BUFSIZE) != s->base) { //not full
-        //file data
-        //printf("Fill Data: %c\n", data);
-        //efficiency can be improved by fill chunk of data together
-        s->buf[s->bufRear] = data;
-        s->bufRear = (s->bufRear + 1 + BUFSIZE) % BUFSIZE;
-        if(s->unusedWnd > 0){
-            s->wndRear++;
-            s->unusedWnd--;
+size_t fillData(struct swnd* s, FILE *fp){
+    //int capbility = BUFSIZE - (s->bufRear - s->base + BUFSIZE) % BUFSIZE;
+    size_t readBytes;
+    size_t SecondReadBytes;
+    if (s->bufRear >= s->base) { //...base...rear...
+        readBytes = fread(s->buf + s->bufRear, 1, BUFSIZE - s->bufRear -1, fp);
+        s->bufRear += readBytes;
+        if (readBytes < BUFSIZE - s->bufRear -1) {
+            return readBytes;
         }
-        return 1;
-    } else {
-        return 0;
+        if (s->base == 0) {
+            return readBytes;
+        }
+        SecondReadBytes = fread(s->buf + s->bufRear, 1, 1, fp);
+        if (SecondReadBytes != 1) {
+            return readBytes;
+        }
+        SecondReadBytes = fread(s->buf, 1, s->base - 1, fp);
+        s->bufRear = 0;
+        s->bufRear += SecondReadBytes;
+        return SecondReadBytes + readBytes;
+    } else { // ....rear....base...
+        readBytes = fread(s->buf + s->bufRear, 1, s->base - s->bufRear - 1, fp);
+        s->bufRear += readBytes;
+        return readBytes;
     }
+//    
+//    if (((s->bufRear + 1 + BUFSIZE) % BUFSIZE) != s->base) { //not full
+//        //file data
+//        //printf("Fill Data: %c\n", data);
+//        //efficiency can be improved by fill chunk of data together
+//        s->buf[s->bufRear] = data;
+//        s->bufRear = (s->bufRear + 1 + BUFSIZE) % BUFSIZE;
+//        if(s->unusedWnd > 0){
+//            s->wndRear++;
+//            s->unusedWnd--;
+//        }
+//        return 1;
+//    } else {
+//        return 0;
+//    }
 }
 
 int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
@@ -386,7 +404,7 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
             s->wndRear = (s->wndRear + steps + BUFSIZE) % BUFSIZE;
         }
         
-        return 1;
+        return steps;
     }
     
     //if all ack are received
@@ -533,9 +551,10 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
 {
     int socket;
     FILE *fp;
-    int totalSent = 0;
-    int contentLen = 0;
-    char ch;
+    size_t readBytes;
+    long long int totalSent = 0;
+    //int contentLen = 0;
+    //char ch;
     struct addrinfo servInfo;
     struct swnd sw = swFactory();
     struct head ackPak;
@@ -548,14 +567,14 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
         exit(1);
     }
     
-    if ((fp = fopen(filename, "r")) == NULL) {
+    if ((fp = fopen(filename, "rb")) == NULL) {
         perror("Can't Open File\n");
         exit(1);
     }
     
     //setSocket Timeout 100ms
     tv.tv_sec = 0;
-    tv.tv_usec = 1;
+    tv.tv_usec = 10;
     if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
         perror("Error");
     }
@@ -564,13 +583,12 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     //sw.unusedWnd = 500;
     //sw.newSeq = 0;// Assume the first seq is always 0. Can be improved
     
-    ch = fgetc(fp);
-    while(ch != EOF || totalSent < contentLen || sw.base != sw.bufRear){
-        while (ch != EOF && fillData(&sw, ch) == 1) {
-            contentLen++;
-            ch = fgetc(fp);
-        }
-        totalSent += sendPacket(&sw, socket, servInfo);
+    while(totalSent < bytesToTransfer|| sw.base != sw.bufRear){
+        size_t r =fillData(&sw, fp);
+        //printf("%lu\n",r);
+        readBytes +=r;
+        
+        sendPacket(&sw, socket, servInfo);
         
         if (isTimeOut(sw.timers[sw.base]) == 1) {
             handleTO(&sw, socket, servInfo);
@@ -582,7 +600,8 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
             //handleTO(&sw, socket, servInfo);
             //printf("receive ACK TO\n");
         } else {
-            rcvACK(&sw, ackPak, socket, servInfo);
+            totalSent += rcvACK(&sw, ackPak, socket, servInfo);
+            //printf("ack %lld\n",totalSent);
         }
     }
     

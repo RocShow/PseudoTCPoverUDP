@@ -14,10 +14,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "C167743419E62A6200EE0B3A"
-               BuildableName = "MP2_Sender"
-               BlueprintName = "MP2_Sender"
-               ReferencedContainer = "container:MP2_Sender.xcodeproj">
+               BlueprintIdentifier = "C11ED1A819E9FC9B00040151"
+               BuildableName = "FileIO"
+               BlueprintName = "FileIO"
+               ReferencedContainer = "container:FileIO.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C167743419E62A6200EE0B3A"
-            BuildableName = "MP2_Sender"
-            BlueprintName = "MP2_Sender"
-            ReferencedContainer = "container:MP2_Sender.xcodeproj">
+            BlueprintIdentifier = "C11ED1A819E9FC9B00040151"
+            BuildableName = "FileIO"
+            BlueprintName = "FileIO"
+            ReferencedContainer = "container:FileIO.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
    </TestAction>
@@ -51,18 +51,12 @@
       <BuildableProductRunnable>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C167743419E62A6200EE0B3A"
-            BuildableName = "MP2_Sender"
-            BlueprintName = "MP2_Sender"
-            ReferencedContainer = "container:MP2_Sender.xcodeproj">
+            BlueprintIdentifier = "C11ED1A819E9FC9B00040151"
+            BuildableName = "FileIO"
+            BlueprintName = "FileIO"
+            ReferencedContainer = "container:FileIO.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <CommandLineArguments>
-         <CommandLineArgument
-            argument = "127.0.0.1 3306 test.pdf 146002519"
-            isEnabled = "YES">
-         </CommandLineArgument>
-      </CommandLineArguments>
       <AdditionalOptions>
       </AdditionalOptions>
    </LaunchAction>
@@ -75,10 +69,10 @@
       <BuildableProductRunnable>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C167743419E62A6200EE0B3A"
-            BuildableName = "MP2_Sender"
-            BlueprintName = "MP2_Sender"
-            ReferencedContainer = "container:MP2_Sender.xcodeproj">
+            BlueprintIdentifier = "C11ED1A819E9FC9B00040151"
+            BuildableName = "FileIO"
+            BlueprintName = "FileIO"
+            ReferencedContainer = "container:FileIO.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
