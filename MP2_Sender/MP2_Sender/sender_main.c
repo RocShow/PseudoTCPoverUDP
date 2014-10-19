@@ -14,27 +14,28 @@
 #define MSS 1472
 #define HEADLEN 12
 #define MAXBODY 1460
-#define BUFSIZE 10485767 // 10MB Buffer
-#define TIMEOUT 21
+//#define BUFSIZE 10485767 // 10MB Buffer
+#define BUFSIZE 52428853 // 50MB Buffer
+//#define TIMEOUT 21
 
 typedef enum {SS,CA,FR} swState;
 
-clock_t start;
+//clock_t start;
 
-void startTimer(){
-    start = clock();
-}
-
-int getTime(){
-    clock_t now = clock() - start;
-    clock_t msec = now * 1000 / CLOCKS_PER_SEC;
-    //printf("%lu\n",msec);
-    return (int)msec;
-}
-
-int isTimeOut(clock_t end){ //unit of threshold is millisecond
-    return getTime() > end ? 1 : 0;
-}
+//void startTimer(){
+//    start = clock();
+//}
+//
+//int getTime(){
+//    clock_t now = clock() - start;
+//    clock_t msec = now * 1000 / CLOCKS_PER_SEC;
+//    //printf("%lu\n",msec);
+//    return (int)msec;
+//}
+//
+//int isTimeOut(clock_t end){ //unit of threshold is millisecond
+//    return getTime() > end ? 1 : 0;
+//}
 
 struct head{
     int seqNum;
@@ -187,6 +188,15 @@ size_t fillData(struct swnd* s, FILE *fp){
     if (s->bufRear >= s->base) { //...base...rear...
         readBytes = fread(s->buf + s->bufRear, 1, BUFSIZE - s->bufRear -1, fp);
         s->bufRear += readBytes;
+        if (s->unusedWnd > 0) {
+            if (readBytes > s->unusedWnd) {
+                extendWndSize(s, s->unusedWnd);
+                s->unusedWnd = 0;
+            } else {
+                extendWndSize(s, (int)readBytes);
+                s->unusedWnd = s->unusedWnd - (int)readBytes;
+            }
+        }
         if (readBytes < BUFSIZE - s->bufRear -1) {
             return readBytes;
         }
@@ -200,6 +210,15 @@ size_t fillData(struct swnd* s, FILE *fp){
         SecondReadBytes = fread(s->buf, 1, s->base - 1, fp);
         s->bufRear = 0;
         s->bufRear += SecondReadBytes;
+        if (s->unusedWnd > 0) {
+            if (SecondReadBytes > s->unusedWnd) {
+                extendWndSize(s, s->unusedWnd);
+                s->unusedWnd = 0;
+            } else {
+                extendWndSize(s, (int)SecondReadBytes);
+                s->unusedWnd = s->unusedWnd - (int)SecondReadBytes;
+            }
+        }
         return SecondReadBytes + readBytes;
     } else { // ....rear....base...
         readBytes = fread(s->buf + s->bufRear, 1, s->base - s->bufRear - 1, fp);
@@ -244,11 +263,11 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
                 exit(1);
             }
             //Set Timer
-            if(s->timerStarted == 0){
-                startTimer();
-                s->timerStarted = 1;
-            }
-            s->timers[s->newSeq] = getTime() + TIMEOUT;
+            //if(s->timerStarted == 0){
+                //startTimer();
+                //s->timerStarted = 1;
+            //}
+            //s->timers[s->newSeq] = getTime() + TIMEOUT;
             
             s->newSeq = (s->newSeq + MAXBODY + BUFSIZE) % BUFSIZE;
             total += MAXBODY;
@@ -273,11 +292,11 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
                 exit(1);
             }
             //Set Timer
-            if(s->timerStarted == 0){
-                startTimer();
-                s->timerStarted = 1;
-            }
-            s->timers[s->newSeq] = getTime() + TIMEOUT;
+//            if(s->timerStarted == 0){
+//                startTimer();
+//                s->timerStarted = 1;
+//            }
+            //s->timers[s->newSeq] = getTime() + TIMEOUT;
             
             s->newSeq = s->wndRear;
             total += bodySize;
@@ -310,12 +329,12 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
                 perror("Resend Data Failed.\n");
                 exit(1);
             }
-            //Set Timer
-            if(s->timerStarted == 0){
-                startTimer();
-                s->timerStarted = 1;
-            }
-            s->timers[tempBase] = getTime() + TIMEOUT;
+//            //Set Timer
+//            if(s->timerStarted == 0){
+//                startTimer();
+//                s->timerStarted = 1;
+//            }
+//            s->timers[tempBase] = getTime() + TIMEOUT;
             
             tempBase = (tempBase + MAXBODY + BUFSIZE) % BUFSIZE;
             total += MAXBODY;
@@ -339,12 +358,12 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
                 perror("Resend Data Failed.\n");
                 exit(1);
             }
-            //Set Timer
-            if(s->timerStarted == 0){
-                startTimer();
-                s->timerStarted = 1;
-            }
-            s->timers[tempBase] = getTime() + TIMEOUT;
+//            //Set Timer
+//            if(s->timerStarted == 0){
+//                startTimer();
+//                s->timerStarted = 1;
+//            }
+//            s->timers[tempBase] = getTime() + TIMEOUT;
             
             //tempBase = s->newSeq;
             total += bodySize;
@@ -474,13 +493,13 @@ void terminate(int socket,struct addrinfo servInfo){
         exit(1);
     }
     
-    startTimer();
+    //startTimer();
     //Until terminate or timeout
     while (1) {
-        if (isTimeOut(1000) == 1) { //1000ms to timeout
-            printf("FIN timeout. Exit.\n");
-            return;
-        }
+//        if (isTimeOut(1000) == 1) { //1000ms to timeout
+//            printf("FIN timeout. Exit.\n");
+//            return;
+//        }
         recvNum = recvfrom(socket, packet, MSS, 0,
                            (struct sockaddr *)&their_addr, &addr_len);
         if (recvNum == -1){ //timeout
@@ -624,7 +643,7 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
         }
     }
     
-    printf("Sent %d Bytes.\n", sw.base);
+    printf("Sent %lld Bytes.\n", totalSent);
     
     //Terminate the transimission
     terminate(socket, servInfo);
