@@ -15,26 +15,29 @@
 #define HEADLEN 12
 #define MAXBODY 1460
 #define BUFSIZE 10485767 // 10MB Buffer
+//#define BUFSIZE 52428835
 #define TIMEOUT 21
 
 typedef enum {SS,CA,FR} swState;
 
-clock_t start;
+//clock_t start;
 
-void startTimer(){
-    start = clock();
-}
-
-int getTime(){
-    clock_t now = clock() - start;
-    clock_t msec = now * 1000 / CLOCKS_PER_SEC;
-    //printf("%lu\n",msec);
-    return (int)msec;
-}
-
-int isTimeOut(clock_t end){ //unit of threshold is millisecond
-    return getTime() > end ? 1 : 0;
-}
+int timeoutCount = 0;
+//
+//void startTimer(){
+//    start = clock();
+//}
+//
+//int getTime(){
+//    clock_t now = clock() - start;
+//    clock_t msec = now * 1000 / CLOCKS_PER_SEC;
+//    //printf("%lu\n",msec);
+//    return (int)msec;
+//}
+//
+//int isTimeOut(clock_t end){ //unit of threshold is millisecond
+//    return getTime() > end ? 1 : 0;
+//}
 
 struct head{
     int seqNum;
@@ -54,7 +57,7 @@ struct swnd{
     int bufRear;
     int unusedWnd; //handle the situation that no enough data to fill the window
     char *buf;
-    int *timers;
+//    int *timers;
 //    int timerMap[BUFSIZE];
 //    int curTimer;
 //    int timerRear;
@@ -74,7 +77,7 @@ struct swnd swFactory(){
     sw.unusedWnd = MAXBODY;
     sw.ssthreshold = 65536; //64KB
     sw.buf = malloc(sizeof(char) * BUFSIZE);
-    sw.timers = malloc(sizeof(int) * BUFSIZE);
+    //sw.timers = malloc(sizeof(int) * BUFSIZE);
     sw.lastACK = -1;
     sw.sameACK = 0;
     sw.state = SS;
@@ -83,7 +86,7 @@ struct swnd swFactory(){
 
 void freeSwnd(struct swnd* sw){
     free(sw->buf);
-    free(sw->timers);
+    //free(sw->timers);
 }
 
 void makePacket(int _seqNum, int _ackNum, short _rwnd, unsigned _ack, unsigned _syn, unsigned _fin, void* packet){
@@ -95,7 +98,7 @@ void makePacket(int _seqNum, int _ackNum, short _rwnd, unsigned _ack, unsigned _
     h.ack =  _ack;
     h.syn = _syn;
     h.fin = _fin;
-    
+    //printf("%d\n",h.seqNum);
     memcpy(packet, &h, HEADLEN);
     
     //return HEADLEN;
@@ -131,7 +134,7 @@ int getCurWndSize(struct swnd *s){
 
 void extendWndSize(struct swnd* s, int size){
     int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
-    if(curSize + size >= BUFSIZE / 50){
+    if(curSize + size >= BUFSIZE){
         //printf("");
         return;
     }
@@ -169,24 +172,37 @@ void shrinkWndSize(struct swnd* s){
 
 void resetWndSize(struct swnd* s){
     //printf("Reset Window Size\n");
-    if ((s->bufRear - s->base + BUFSIZE) % BUFSIZE > MAXBODY) {
-        s->wndRear = (s->base + MAXBODY) % BUFSIZE;
+    if ((s->bufRear - s->base + BUFSIZE) % BUFSIZE > 1 * MAXBODY) {
+        s->wndRear = (s->base + 1 * MAXBODY) % BUFSIZE;
         s->unusedWnd = 0;
     } else {
         s->wndRear = s->bufRear;
-        s->unusedWnd = MAXBODY - (s->bufRear - s->base + BUFSIZE) % BUFSIZE;
+        s->unusedWnd = 1 * MAXBODY - (s->bufRear - s->base + BUFSIZE) % BUFSIZE;
     }
     s->newSeq = s->wndRear;
 }
 
 //sliding window operations
 size_t fillData(struct swnd* s, FILE *fp){
-    //int capbility = BUFSIZE - (s->bufRear - s->base + BUFSIZE) % BUFSIZE;
+    int capbility = BUFSIZE - (s->bufRear - s->base + BUFSIZE) % BUFSIZE;
+    if (capbility < 10000000) {
+        return 0;
+    }
+    //printf("readFIle\n");
     size_t readBytes;
     size_t SecondReadBytes;
     if (s->bufRear >= s->base) { //...base...rear...
         readBytes = fread(s->buf + s->bufRear, 1, BUFSIZE - s->bufRear -1, fp);
         s->bufRear += readBytes;
+        if (s->unusedWnd > 0) {
+            if (readBytes > s->unusedWnd) {
+                extendWndSize(s, s->unusedWnd);
+                s->unusedWnd = 0;
+            } else {
+                extendWndSize(s, (int)readBytes);
+                s->unusedWnd = s->unusedWnd - (int)readBytes;
+            }
+        }
         if (readBytes < BUFSIZE - s->bufRear -1) {
             return readBytes;
         }
@@ -200,6 +216,15 @@ size_t fillData(struct swnd* s, FILE *fp){
         SecondReadBytes = fread(s->buf, 1, s->base - 1, fp);
         s->bufRear = 0;
         s->bufRear += SecondReadBytes;
+        if (s->unusedWnd > 0) {
+            if (SecondReadBytes > s->unusedWnd) {
+                extendWndSize(s, s->unusedWnd);
+                s->unusedWnd = 0;
+            } else {
+                extendWndSize(s, (int)SecondReadBytes);
+                s->unusedWnd = s->unusedWnd - (int)SecondReadBytes;
+            }
+        }
         return SecondReadBytes + readBytes;
     } else { // ....rear....base...
         readBytes = fread(s->buf + s->bufRear, 1, s->base - s->bufRear - 1, fp);
@@ -223,9 +248,9 @@ size_t fillData(struct swnd* s, FILE *fp){
 //    }
 }
 
-int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
+int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo, int firstTime){
     int total = 0;
-    if (s->newSeq != s->wndRear) { //can send data
+    if (s->newSeq != s->wndRear || firstTime == 1) { //can send data
         char packet[MSS];
         memset(packet, 0, MSS);
         while ((s->wndRear - s->newSeq + BUFSIZE) % BUFSIZE > MAXBODY) { //can send full size body
@@ -245,10 +270,10 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
             }
             //Set Timer
             if(s->timerStarted == 0){
-                startTimer();
+                //startTimer();
                 s->timerStarted = 1;
             }
-            s->timers[s->newSeq] = getTime() + TIMEOUT;
+            //s->timers[s->newSeq] = getTime() + TIMEOUT;
             
             s->newSeq = (s->newSeq + MAXBODY + BUFSIZE) % BUFSIZE;
             total += MAXBODY;
@@ -274,10 +299,10 @@ int sendPacket(struct swnd* s, int socket, struct addrinfo servInfo){
             }
             //Set Timer
             if(s->timerStarted == 0){
-                startTimer();
+                //startTimer();
                 s->timerStarted = 1;
             }
-            s->timers[s->newSeq] = getTime() + TIMEOUT;
+            //s->timers[s->newSeq] = getTime() + TIMEOUT;
             
             s->newSeq = s->wndRear;
             total += bodySize;
@@ -312,10 +337,10 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
             }
             //Set Timer
             if(s->timerStarted == 0){
-                startTimer();
+                //startTimer();
                 s->timerStarted = 1;
             }
-            s->timers[tempBase] = getTime() + TIMEOUT;
+            //s->timers[tempBase] = getTime() + TIMEOUT;
             
             tempBase = (tempBase + MAXBODY + BUFSIZE) % BUFSIZE;
             total += MAXBODY;
@@ -341,10 +366,10 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
             }
             //Set Timer
             if(s->timerStarted == 0){
-                startTimer();
+                //startTimer();
                 s->timerStarted = 1;
             }
-            s->timers[tempBase] = getTime() + TIMEOUT;
+            //s->timers[tempBase] = getTime() + TIMEOUT;
             
             //tempBase = s->newSeq;
             total += bodySize;
@@ -353,7 +378,7 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
     return total;
 }
 
-int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
+int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo, int *resent){
     int ackNum = h.ackNum;
     //printf("s->base: %d, RECEIVE ACK: %d\n", s->base, ackNum);
 //    if (s->base == ackNum) {
@@ -361,6 +386,9 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
 //    }
     //Duplicate ACK
     if (ackNum == s->base && ackNum == s->lastACK) {
+        if (*resent == 1) {
+            return 0;
+        }
         //printf("dup\n");
         if (s->state == FR) {
             extendWndSize(s, 1);
@@ -382,8 +410,10 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
             }
             
             resend(s, socket, servInfo);
+            *resent = 1;
             //printf("fast Resend\n");
         }
+        
         return 0; // to be confirmed
     }
     
@@ -399,8 +429,8 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
                 break;
             case CA:{
                 //Need Improve
-                //extendWndSize(s, MAXBODY);
-                extendWndSize(s, MAXBODY * MAXBODY / curWndSize);
+                extendWndSize(s, MAXBODY);
+                //extendWndSize(s, MAXBODY * MAXBODY / curWndSize);
                 break;
             }
             case FR:
@@ -420,22 +450,22 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
             s->wndRear = (s->wndRear + steps + BUFSIZE) % BUFSIZE;
         }
         
-        
+        *resent = 0;
         return steps;
     }
     
     //if all ack are received
-    if (s->base == s->newSeq) {
-        //stop timer
-        s->timerStarted = 0;
-    }
+//    if (s->base == s->newSeq) {
+//        //stop timer
+//        s->timerStarted = 0;
+//    }
 
     return 0;
     //should fill data after revACK
 }
 
 void handleTO(struct swnd *s, int socket, struct addrinfo servInfo){
-    //printf("timeout\n");
+    printf("timeout %d\n",timeoutCount++);
     int curWndSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
     switch (s->state) {
         case SS:
@@ -474,13 +504,13 @@ void terminate(int socket,struct addrinfo servInfo){
         exit(1);
     }
     
-    startTimer();
+    //startTimer();
     //Until terminate or timeout
     while (1) {
-        if (isTimeOut(1000) == 1) { //1000ms to timeout
-            printf("FIN timeout. Exit.\n");
-            return;
-        }
+//        if (isTimeOut(1000) == 1) { //1000ms to timeout
+//            printf("FIN timeout. Exit.\n");
+//            return;
+//        }
         recvNum = recvfrom(socket, packet, MSS, 0,
                            (struct sockaddr *)&their_addr, &addr_len);
         if (recvNum == -1){ //timeout
@@ -580,6 +610,8 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     struct sockaddr_storage their_addr;
     socklen_t addr_len = sizeof their_addr;
     struct timeval tv;
+    int firstTime = 1;
+    int resent = 0;
     
     if ((socket = getSenderSocket(hostname, hostUDPport, &servInfo)) == -1){
         perror("Can't Create Socket\n");
@@ -593,7 +625,7 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     
     //setSocket Timeout
     tv.tv_sec = 0;
-    tv.tv_usec = 25000;
+    tv.tv_usec = 300000;
     if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
         perror("Error");
     }
@@ -603,11 +635,16 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     //sw.newSeq = 0;// Assume the first seq is always 0. Can be improved
     
     while(totalSent < bytesToTransfer|| sw.base != sw.bufRear){
-        size_t r =fillData(&sw, fp);
-        //printf("%lu\n",r);
-        readBytes +=r;
+        if (readBytes < bytesToTransfer) {
+            size_t r =fillData(&sw, fp);
+            //printf("%lu\n",r);
+            readBytes +=r;
+        }
         
-        sendPacket(&sw, socket, servInfo);
+        
+        sendPacket(&sw, socket, servInfo, firstTime);
+        
+        firstTime = 0;
         
 //        if (isTimeOut(sw.timers[sw.base]) == 1) {
 //            handleTO(&sw, socket, servInfo);
@@ -619,12 +656,12 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
             handleTO(&sw, socket, servInfo);
             //printf("receive ACK TO\n");
         } else {
-            totalSent += rcvACK(&sw, ackPak, socket, servInfo);
+            totalSent += rcvACK(&sw, ackPak, socket, servInfo, &resent);
             //printf("ack %lld\n",totalSent);
         }
     }
     
-    printf("Sent %d Bytes.\n", sw.base);
+    printf("Sent %lld Bytes.\n", totalSent);
     
     //Terminate the transimission
     terminate(socket, servInfo);
