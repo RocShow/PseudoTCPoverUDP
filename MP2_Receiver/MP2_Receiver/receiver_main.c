@@ -17,9 +17,9 @@
 #define HEADLEN 12
 #define MAXBODY MSS - HEADLEN
 //#define SEQRANGE 10485767 // 10MB Buffer
-//#define SEQRANGE 52428853 // 50MB Buffer
+#define SEQRANGE 52428853 // 50MB Buffer
 //#define SEQRANGE 1600
-#define RCVBUFSIZE 10485767 // 10MB
+#define RCVBUFSIZE 1048576 // 10MB
 
 
 struct head{
@@ -30,69 +30,6 @@ struct head{
     unsigned syn:1;
     unsigned fin:1;
 };
-
-struct rcvBuf{
-    char *data;
-    char *rcvFlags;
-    int ack;
-    FILE *fp;
-};
-
-struct rcvBuf bufFactory(FILE *fp){
-    struct rcvBuf buf;
-    buf.ack = 0;
-    buf.fp = fp;
-    buf.data = (char*)malloc(RCVBUFSIZE);
-    buf.rcvFlags = (char*)malloc(RCVBUFSIZE);
-    memset(buf.data, 0, RCVBUFSIZE);
-    memset(buf.rcvFlags, 0, RCVBUFSIZE);
-    return buf;
-}
-
-void writeFile(struct rcvBuf *buf, int size){
-    fwrite(buf->data, 1, size, buf->fp);
-}
-
-void setACK(struct rcvBuf *buf){
-    int old = buf->ack;
-    while (buf->rcvFlags[buf->ack] != 0) {
-        buf->rcvFlags[buf->ack] = 0;
-        if (buf->ack == RCVBUFSIZE - 1 && buf->ack != old) {
-            //printf("write to file\n");
-            writeFile(buf, RCVBUFSIZE);
-            buf->ack = 0;
-        }
-        buf->ack = buf->ack + 1;
-    }
-}
-
-int getACK(struct rcvBuf *buf){
-    setACK(buf);
-    return buf->ack;
-}
-
-void setBufFlags(struct rcvBuf *buf, char flag, int start, int size){
-    int freeSpace = RCVBUFSIZE - buf->ack;
-    if (freeSpace < size) {
-        memset(buf->rcvFlags + start, flag, freeSpace);
-        start = 0;
-        size = size - freeSpace;
-        //printf("%d\n", size);
-    }
-    memset(buf->rcvFlags + start, (short)flag, size);
-    //setACK(buf);
-}
-
-//void setFlag0(struct rcvBuf *buf, int start, int size){
-//    setBufFlags(buf,0,start,size);
-//}
-
-void setFlag1(struct rcvBuf *buf, int start, int size){
-    if (buf->rcvFlags[start] != 0) {
-        return;
-    }
-    setBufFlags(buf,1,start,size);
-}
 
 void makePacket(int _seqNum, int _ackNum, short _rwnd, unsigned _ack, unsigned _syn, unsigned _fin, void* packet){
     
@@ -236,13 +173,11 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     socklen_t addr_len;
     struct head* h;
     char* body;
-    int bodySize;
-    //int ackNum = 0; // Assume the first seq is always 0. Can be improved
+    int ackNum = 0; // Assume the first seq is always 0. Can be improved
     char ackPak[HEADLEN];
-    //int sameACK = 0;
-    //char *rcvbuf = malloc(RCVBUFSIZE);
-    //int rcvStatus = 0;
-    struct rcvBuf buffer;
+    int sameACK = 0;
+    char *rcvbuf = malloc(RCVBUFSIZE);
+    int rcvStatus = 0;
     
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
@@ -252,9 +187,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         perror("Can't Open File.\n");
         exit(1);
     }
-    
-    buffer = bufFactory(fp);
-    
+
     addr_len = sizeof their_addr;
     while (1) {
         if ((num = recvfrom(socket, buf, MSS, 0,
@@ -263,10 +196,10 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
             //buf[num] = '\0';
             h = getHead(buf);
             body = getBody(buf);
-            bodySize = (int)num - HEADLEN;
+
             //is FinPacket?
             if (h->fin == 1) {
-                writeFile(&buffer, getACK(&buffer));
+                fwrite(rcvbuf, 1, rcvStatus, fp);
                 terminate(socket, their_addr, addr_len);
                 break;
             }
@@ -282,52 +215,39 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
 //            }
             
             //dataPacket
-            //printf("Waiting for: %d, Receive: %d, Length: %d\n",getACK(&buffer), h->seqNum, bodySize);
-            memcpy(buffer.data + h->seqNum, body, bodySize);
-            setFlag1(&buffer, h->seqNum, bodySize);
-            makeACK(ackPak, getACK(&buffer));
-            if (sendto(socket, ackPak, HEADLEN, 0,
-                       (struct sockaddr *)&their_addr, addr_len) == -1){
-                perror("Send ACK Failed.\n");
-                exit(1);
+            //printf("Waiting for: %d, Receive: %d\n",ackNum, h->seqNum);
+            if(h->seqNum == ackNum){ //Correct Packet
+                sameACK = 0;
+                ackNum = (ackNum + num - HEADLEN + SEQRANGE) % SEQRANGE;
+                total += num - HEADLEN;
+                memcpy(rcvbuf + rcvStatus, body, num - HEADLEN);
+                rcvStatus += num-HEADLEN;
+                if (rcvStatus > RCVBUFSIZE - MSS - 1) {
+                    fwrite(rcvbuf, 1, rcvStatus, fp);
+                    rcvStatus = 0;
+                }
+                //printf("%s\n",body);
+                //fprintf(fp, "%s", body);
+                
+                makeACK(ackPak,ackNum);
+                if (sendto(socket, ackPak, HEADLEN, 0,
+                           (struct sockaddr *)&their_addr, addr_len) == -1){
+                    perror("Send ACK Failed.\n");
+                    exit(1);
+                }
+                //printf("Receive %ld\n",total);
+            } else {
+                sameACK++;
+//                printf("duplicate %d\n",sameACK);
+//                if (sameACK < 6) { //avoid too many same ACK
+//                    if (sendto(socket, ackPak, HEADLEN, 0,
+//                               (struct sockaddr *)&their_addr, addr_len) == -1){
+//                        perror("Send ACK Failed.\n");
+//                        exit(1);
+//                    }
+//                }
             }
             
-            
-            
-            
-            
-//            if(h->seqNum == ackNum){ //Correct Packet
-//                sameACK = 0;
-//                ackNum = (ackNum + num - HEADLEN + RCVBUFSIZE) % RCVBUFSIZE;
-//                total += num - HEADLEN;
-//                memcpy(rcvbuf + rcvStatus, body, num - HEADLEN);
-//                rcvStatus += num-HEADLEN;
-//                if (rcvStatus > RCVBUFSIZE - MSS - 1) {
-//                    fwrite(rcvbuf, 1, rcvStatus, fp);
-//                    rcvStatus = 0;
-//                }
-//                //printf("%s\n",body);
-//                //fprintf(fp, "%s", body);
-//                
-//                makeACK(ackPak,ackNum);
-//                if (sendto(socket, ackPak, HEADLEN, 0,
-//                           (struct sockaddr *)&their_addr, addr_len) == -1){
-//                    perror("Send ACK Failed.\n");
-//                    exit(1);
-//                }
-//                //printf("Receive %ld\n",total);
-//            } else {
-//                sameACK++;
-////                printf("duplicate %d\n",sameACK);
-////                if (sameACK < 6) { //avoid too many same ACK
-////                    if (sendto(socket, ackPak, HEADLEN, 0,
-////                               (struct sockaddr *)&their_addr, addr_len) == -1){
-////                        perror("Send ACK Failed.\n");
-////                        exit(1);
-////                    }
-////                }
-//            }
-//            
         } else if (num == -1){
             perror("Receive Error.\n");
             break;

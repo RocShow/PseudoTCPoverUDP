@@ -14,8 +14,8 @@
 #define MSS 1472
 #define HEADLEN 12
 #define MAXBODY 1460
-#define BUFSIZE 10485767 // 10MB Buffer
-//#define BUFSIZE 52428853 // 50MB Buffer
+//#define BUFSIZE 10485767 // 10MB Buffer
+#define BUFSIZE 52428853 // 50MB Buffer
 //#define TIMEOUT 21
 
 typedef enum {SS,CA,FR} swState;
@@ -72,9 +72,8 @@ struct swnd swFactory(){
     sw.bufRear = 0;
     sw.newSeq = 0;
     sw.wndRear = 0;
-    sw.unusedWnd = 1000;
-    //sw.ssthreshold = 65536; //64KB
-    sw.ssthreshold = 1000; //64KB
+    sw.unusedWnd = MAXBODY;
+    sw.ssthreshold = 65536; //64KB
     sw.buf = malloc(sizeof(char) * BUFSIZE);
     sw.timers = malloc(sizeof(int) * BUFSIZE);
     sw.lastACK = -1;
@@ -132,7 +131,6 @@ int getCurWndSize(struct swnd *s){
 }
 
 void extendWndSize(struct swnd* s, int size){
-    return;
     int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
     if(curSize + size >= BUFSIZE / 50){
         //printf("");
@@ -156,7 +154,6 @@ void extendWndSize(struct swnd* s, int size){
 }
 
 void shrinkWndSize(struct swnd* s){
-    return;
     int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
     if (s->unusedWnd > curSize / 2) {
         s->unusedWnd -= curSize / 2;
@@ -172,7 +169,6 @@ void shrinkWndSize(struct swnd* s){
 }
 
 void resetWndSize(struct swnd* s){
-    return;
     //printf("Reset Window Size\n");
     if ((s->bufRear - s->base + BUFSIZE) % BUFSIZE > MAXBODY) {
         s->wndRear = (s->base + MAXBODY) % BUFSIZE;
@@ -376,7 +372,7 @@ int resend(struct swnd* s, int socket, struct addrinfo servInfo){
     return total;
 }
 
-int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo, int *sent){
+int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
     int ackNum = h.ackNum;
     //printf("s->base: %d, RECEIVE ACK: %d\n", s->base, ackNum);
 //    if (s->base == ackNum) {
@@ -391,19 +387,13 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo, 
             s->sameACK++;
         }
         if (s->sameACK >= 4) { //fast retransmission
-            if (*sent == 1) {
-                //printf("*********skip\n");
-                return 0;
-            }
-            *sent = 1;
             switch (s->state) {
                 case SS:
                 case CA:
-                    //shrinkWndSize(s);
-                    resetWndSize(s);
-                    //extendWndSize(s, 3);
-                    //s->ssthreshold = s->ssthreshold / 2;
-                    //s->state = FR;
+                    shrinkWndSize(s);
+                    extendWndSize(s, 3);
+                    s->ssthreshold = s->ssthreshold / 2;
+                    s->state = FR;
                     break;
                     
                 default:
@@ -411,15 +401,13 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo, 
             }
             
             resend(s, socket, servInfo);
-            //printf("fast Resend, start from :%d\n", ackNum);
+            //printf("fast Resend\n");
         }
         return 0; // to be confirmed
     }
     
     //New ACK
-    //if(ackNum != s->base && (ackNum - s->base + BUFSIZE) % BUFSIZE <= (s->wndRear - s->base + BUFSIZE) % BUFSIZE){
-    if(ackNum != s->base){
-        *sent = 0;
+    if(ackNum != s->base && (ackNum - s->base + BUFSIZE) % BUFSIZE <= (s->newSeq - s->base + BUFSIZE) % BUFSIZE){
         int curWndSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
         s->sameACK = 0;
         s->lastACK = ackNum;
@@ -431,9 +419,7 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo, 
             case CA:{
                 //Need Improve
                 //extendWndSize(s, MAXBODY);
-                if (curWndSize != 0){
-                    extendWndSize(s, MAXBODY * MAXBODY / curWndSize);
-                }
+                extendWndSize(s, MAXBODY * MAXBODY / curWndSize);
                 break;
             }
             case FR:
@@ -613,7 +599,6 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
     struct sockaddr_storage their_addr;
     socklen_t addr_len = sizeof their_addr;
     struct timeval tv;
-    int resent = 0;
     
     if ((socket = getSenderSocket(hostname, hostUDPport, &servInfo)) == -1){
         perror("Can't Create Socket\n");
@@ -653,7 +638,7 @@ void reliablyTransfer(char* hostname, unsigned short int hostUDPport, char* file
             handleTO(&sw, socket, servInfo);
             //printf("receive ACK TO\n");
         } else {
-            totalSent += rcvACK(&sw, ackPak, socket, servInfo, &resent);
+            totalSent += rcvACK(&sw, ackPak, socket, servInfo);
             //printf("ack %lld\n",totalSent);
         }
     }
