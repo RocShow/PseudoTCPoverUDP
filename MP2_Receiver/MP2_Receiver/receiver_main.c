@@ -215,7 +215,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
 //            }
             
             //dataPacket
-            //printf("Waiting for: %d, Receive: %d\n",ackNum, h->seqNum);
+            printf("Waiting for: %d, Receive: %d\n",ackNum, h->seqNum);
             if(h->seqNum == ackNum){ //Correct Packet
                 sameACK = 0;
                 ackNum = (ackNum + num - HEADLEN + SEQRANGE) % SEQRANGE;
@@ -240,11 +240,11 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
                 sameACK++;
 //                printf("duplicate %d\n",sameACK);
 //                if (sameACK < 6) { //avoid too many same ACK
-//                    if (sendto(socket, ackPak, HEADLEN, 0,
-//                               (struct sockaddr *)&their_addr, addr_len) == -1){
-//                        perror("Send ACK Failed.\n");
-//                        exit(1);
-//                    }
+                    if (sendto(socket, ackPak, HEADLEN, 0,
+                               (struct sockaddr *)&their_addr, addr_len) == -1){
+                        perror("Send ACK Failed.\n");
+                        exit(1);
+                    }
 //                }
             }
             

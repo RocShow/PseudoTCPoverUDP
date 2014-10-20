@@ -72,8 +72,10 @@ struct swnd swFactory(){
     sw.bufRear = 0;
     sw.newSeq = 0;
     sw.wndRear = 0;
-    sw.unusedWnd = MAXBODY;
-    sw.ssthreshold = 65536; //64KB
+    //sw.unusedWnd = MAXBODY;
+    sw.unusedWnd = 10000;
+    //sw.ssthreshold = 65536; //64KB
+    sw.ssthreshold = 10000; //64KB
     sw.buf = malloc(sizeof(char) * BUFSIZE);
     sw.timers = malloc(sizeof(int) * BUFSIZE);
     sw.lastACK = -1;
@@ -131,6 +133,7 @@ int getCurWndSize(struct swnd *s){
 }
 
 void extendWndSize(struct swnd* s, int size){
+    return;
     int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
     if(curSize + size >= BUFSIZE / 50){
         //printf("");
@@ -154,6 +157,7 @@ void extendWndSize(struct swnd* s, int size){
 }
 
 void shrinkWndSize(struct swnd* s){
+    return;
     int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
     if (s->unusedWnd > curSize / 2) {
         s->unusedWnd -= curSize / 2;
@@ -169,6 +173,7 @@ void shrinkWndSize(struct swnd* s){
 }
 
 void resetWndSize(struct swnd* s){
+    return;
     //printf("Reset Window Size\n");
     if ((s->bufRear - s->base + BUFSIZE) % BUFSIZE > MAXBODY) {
         s->wndRear = (s->base + MAXBODY) % BUFSIZE;
@@ -454,7 +459,7 @@ int rcvACK(struct swnd* s, struct head h, int socket, struct addrinfo servInfo){
 }
 
 void handleTO(struct swnd *s, int socket, struct addrinfo servInfo){
-    //printf("timeout\n");
+    printf("timeout\n");
     int curWndSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
     switch (s->state) {
         case SS:
