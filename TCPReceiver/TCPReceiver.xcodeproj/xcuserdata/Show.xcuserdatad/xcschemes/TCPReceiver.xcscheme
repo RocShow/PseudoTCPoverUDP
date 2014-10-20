@@ -14,10 +14,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "C167743419E62A6200EE0B3A"
-               BuildableName = "MP2_Sender"
-               BlueprintName = "MP2_Sender"
-               ReferencedContainer = "container:MP2_Sender.xcodeproj">
+               BlueprintIdentifier = "C12C576119F429530007D741"
+               BuildableName = "TCPReceiver"
+               BlueprintName = "TCPReceiver"
+               ReferencedContainer = "container:TCPReceiver.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C167743419E62A6200EE0B3A"
-            BuildableName = "MP2_Sender"
-            BlueprintName = "MP2_Sender"
-            ReferencedContainer = "container:MP2_Sender.xcodeproj">
+            BlueprintIdentifier = "C12C576119F429530007D741"
+            BuildableName = "TCPReceiver"
+            BlueprintName = "TCPReceiver"
+            ReferencedContainer = "container:TCPReceiver.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
    </TestAction>
@@ -51,15 +51,15 @@
       <BuildableProductRunnable>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C167743419E62A6200EE0B3A"
-            BuildableName = "MP2_Sender"
-            BlueprintName = "MP2_Sender"
-            ReferencedContainer = "container:MP2_Sender.xcodeproj">
+            BlueprintIdentifier = "C12C576119F429530007D741"
+            BuildableName = "TCPReceiver"
+            BlueprintName = "TCPReceiver"
+            ReferencedContainer = "container:TCPReceiver.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "192.168.1.5 3306 big.txt 19465998"
+            argument = "3306 output.txt"
             isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>
@@ -75,10 +75,10 @@
       <BuildableProductRunnable>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C167743419E62A6200EE0B3A"
-            BuildableName = "MP2_Sender"
-            BlueprintName = "MP2_Sender"
-            ReferencedContainer = "container:MP2_Sender.xcodeproj">
+            BlueprintIdentifier = "C12C576119F429530007D741"
+            BuildableName = "TCPReceiver"
+            BlueprintName = "TCPReceiver"
+            ReferencedContainer = "container:TCPReceiver.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

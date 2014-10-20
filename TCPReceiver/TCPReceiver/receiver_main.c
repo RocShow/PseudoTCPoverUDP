@@ -183,7 +183,7 @@ int getListenSocket(const int port){
     
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_socktype = 1;
     hints.ai_flags = AI_PASSIVE; // use my IP
     
     sprintf(portStr, "%d", port);
@@ -225,24 +225,19 @@ int getListenSocket(const int port){
     
     return sockfd;
 }
-
+void sigchld_handler(int s)
+{
+    while(waitpid(-1, NULL, WNOHANG) > 0);
+}
 void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     int socket = -1;
     FILE *fp;
-    char buf[MSS];
-    long num;
-    long total;
+    struct sigaction sa;
     struct sockaddr_storage their_addr;
-    socklen_t addr_len;
-    struct head* h;
-    char* body;
-    int bodySize;
-    //int ackNum = 0; // Assume the first seq is always 0. Can be improved
-    char ackPak[HEADLEN];
-    //int sameACK = 0;
-    //char *rcvbuf = malloc(RCVBUFSIZE);
-    //int rcvStatus = 0;
-    struct rcvBuf buffer;
+    socklen_t sin_size;
+    const int bufferSize = 102400;
+    char *buffer = malloc(bufferSize);
+    size_t totalRecv = 0, numRecv = 0;
     
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
@@ -253,107 +248,54 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         exit(1);
     }
     
-    buffer = bufFactory(fp);
-    
-    addr_len = sizeof their_addr;
-    while (1) {
-        if ((num = recvfrom(socket, buf, MSS, 0,
-                            (struct sockaddr *)&their_addr, &addr_len)) > 0) {
-            //Can improve by handling several senders
-            //buf[num] = '\0';
-            h = getHead(buf);
-            body = getBody(buf);
-            bodySize = (int)num - HEADLEN;
-            //is FinPacket?
-            if (h->fin == 1) {
-                writeFile(&buffer, getACK(&buffer));
-                terminate(socket, their_addr, addr_len);
-                break;
-            }
-            
-//            int n = rand()%100;
-//            if (n < 20) { //20% probability to drop a packet
-//                //printf("drop\n");
-//                continue;
-//            }
-//            clock_t start = clock();
-//            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
-//                //20ms delay
-//            }
-            
-            //dataPacket
-            //printf("Waiting for: %d, Receive: %d, Length: %d\n",getACK(&buffer), h->seqNum, bodySize);
-            memcpy(buffer.data + h->seqNum, body, bodySize);
-            setFlag1(&buffer, h->seqNum, bodySize);
-            makeACK(ackPak, getACK(&buffer));
-            if (sendto(socket, ackPak, HEADLEN, 0,
-                       (struct sockaddr *)&their_addr, addr_len) == -1){
-                perror("Send ACK Failed.\n");
-                exit(1);
-            }
-            
-            
-            
-            
-            
-//            if(h->seqNum == ackNum){ //Correct Packet
-//                sameACK = 0;
-//                ackNum = (ackNum + num - HEADLEN + RCVBUFSIZE) % RCVBUFSIZE;
-//                total += num - HEADLEN;
-//                memcpy(rcvbuf + rcvStatus, body, num - HEADLEN);
-//                rcvStatus += num-HEADLEN;
-//                if (rcvStatus > RCVBUFSIZE - MSS - 1) {
-//                    fwrite(rcvbuf, 1, rcvStatus, fp);
-//                    rcvStatus = 0;
-//                }
-//                //printf("%s\n",body);
-//                //fprintf(fp, "%s", body);
-//                
-//                makeACK(ackPak,ackNum);
-//                if (sendto(socket, ackPak, HEADLEN, 0,
-//                           (struct sockaddr *)&their_addr, addr_len) == -1){
-//                    perror("Send ACK Failed.\n");
-//                    exit(1);
-//                }
-//                //printf("Receive %ld\n",total);
-//            } else {
-//                sameACK++;
-////                printf("duplicate %d\n",sameACK);
-////                if (sameACK < 6) { //avoid too many same ACK
-////                    if (sendto(socket, ackPak, HEADLEN, 0,
-////                               (struct sockaddr *)&their_addr, addr_len) == -1){
-////                        perror("Send ACK Failed.\n");
-////                        exit(1);
-////                    }
-////                }
-//            }
-//            
-        } else if (num == -1){
-            perror("Receive Error.\n");
-            break;
-        } else if (num == 0) {
-            break;
-        }
+    if (listen(socket, 10) == -1) {
+        perror("listen");
+        exit(1);
     }
     
-    //clean
-    //free(buf);
-    fclose(fp);
+    sa.sa_handler = sigchld_handler; // reap all dead processes
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+        perror("sigaction");
+        exit(1);
+    }
+    
+    sin_size = sizeof their_addr;
+    socket = accept(socket, (struct sockaddr *)&their_addr, &sin_size);
+    
+    while (1) {
+        memset(buffer, 0, bufferSize);
+        numRecv = recv(socket, buffer, bufferSize, 0);
+        if (numRecv == -1) {
+            break;
+        }
+        totalRecv += numRecv;
+        //printf("RECV:%zu\n",totalRecv);
+        if (strcmp(buffer, "FINISH") == 0) {
+            close(socket);
+            //break;
+        } else {
+            fwrite(buffer, 1, numRecv, fp);
+        }
+    }
+    printf("RECV:%zu\n",totalRecv - 7);
     close(socket);
-    printf("total %ld\n",total);
+    free(buffer);
+    fclose(fp);
 }
 
 int main(int argc, char** argv)
 {
-	unsigned short int udpPort;
-	
-	if(argc != 3)
-	{
-		fprintf(stderr, "usage: %s UDP_port filename_to_write\n\n", argv[0]);
-		exit(1);
-	}
-	
-	udpPort = (unsigned short int)atoi(argv[1]);
-	
-	reliablyReceive(udpPort, argv[2]);
+    unsigned short int udpPort;
+    
+    if(argc != 3)
+    {
+        fprintf(stderr, "usage: %s UDP_port filename_to_write\n\n", argv[0]);
+        exit(1);
+    }
+    
+    udpPort = (unsigned short int)atoi(argv[1]);
+    
+    reliablyReceive(udpPort, argv[2]);
 }
