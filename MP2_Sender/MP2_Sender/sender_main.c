@@ -72,7 +72,7 @@ struct swnd swFactory(){
     sw.bufRear = 0;
     sw.newSeq = 0;
     sw.wndRear = 0;
-    sw.unusedWnd = 65536;
+    sw.unusedWnd = MAXBODY;
     sw.ssthreshold = 65536; //64KB
     sw.buf = malloc(sizeof(char) * BUFSIZE);
     sw.timers = malloc(sizeof(int) * BUFSIZE);
@@ -132,11 +132,7 @@ int getCurWndSize(struct swnd *s){
 
 void extendWndSize(struct swnd* s, int size){
     int curSize = (s->wndRear - s->base + BUFSIZE) % BUFSIZE + s->unusedWnd;
-    if (curSize >= 65536) {
-        return;
-    }
-
-    if(curSize + size >= BUFSIZE){
+    if(curSize + size >= BUFSIZE / 50){
         //printf("");
         return;
     }

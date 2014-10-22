@@ -15,8 +15,9 @@
 #define PORTLEN 6
 #define MSS 1472
 #define HEADLEN 12
-#define MAXBODY 1460
-#define BUFSIZE 1460000
+#define MAXBODY MSS - HEADLEN
+#define SEQRANGE 10485767 // 10MB Buffer
+//#define SEQRANGE 1600
 
 
 struct head{
@@ -163,7 +164,7 @@ int getListenSocket(const int port){
 void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     int socket = -1;
     FILE *fp;
-    char packet[MSS];
+    char buf[MSS];
     long num;
     long total;
     struct sockaddr_storage their_addr;
@@ -172,11 +173,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
     char* body;
     int ackNum = 0; // Assume the first seq is always 0. Can be improved
     char ackPak[HEADLEN];
-    char *rcvbuf = malloc(BUFSIZE);
-    char *rcvFlags = malloc(BUFSIZE);
-    //int rcvStatus = 0;
-    
-    memset(rcvFlags, 0, BUFSIZE);
+    int sameACK = 0;
     
     if((socket = getListenSocket(myUDPport)) == -1){
         perror("Can't Bind Local Port.\n");
@@ -186,56 +183,64 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
         perror("Can't Open File.\n");
         exit(1);
     }
-    makeACK(ackPak,ackNum);
+
     addr_len = sizeof their_addr;
     while (1) {
-        if ((num = recvfrom(socket, packet, MSS, 0,
+        if ((num = recvfrom(socket, buf, MSS, 0,
                             (struct sockaddr *)&their_addr, &addr_len)) > 0) {
             //Can improve by handling several senders
-            //buf[num] = '\0';
-            h = getHead(packet);
-            body = getBody(packet);
-            
+            buf[num] = '\0';
+            h = getHead(buf);
+            body = getBody(buf);
+
             //is FinPacket?
             if (h->fin == 1) {
-                fwrite(rcvbuf, 1, ackNum % BUFSIZE, fp);
                 terminate(socket, their_addr, addr_len);
                 break;
             }
             
-            //dataPacket
-            //printf("Waiting for: %d, Receive: %d\n",ackNum, h->seqNum);
-            if (ackNum > h->seqNum) {
-                //printf("WEIRED!");
-            }
-            memcpy(rcvbuf + h->seqNum % BUFSIZE, packet + HEADLEN, num - HEADLEN);
+//            int n = rand()%100;
+//            if (n < 20) { //20% probability to drop a packet
+//                //printf("drop\n");
+//                continue;
+//            }
+//            clock_t start = clock();
+//            while (clock() - start < 20 * CLOCKS_PER_SEC / 1000) {
+//                //20ms delay
+//            }
             
-            if (h->seqNum == ackNum) {
-                int offset = h->seqNum % BUFSIZE;
-                memset(rcvFlags + offset, 1, num - HEADLEN);
-                while (rcvFlags[ackNum % BUFSIZE] != 0) {
-                    ackNum++;
-                    if (ackNum % BUFSIZE == 0) {
-                        memset(rcvFlags, 0, BUFSIZE);
+            //dataPacket
+            printf("Waiting for: %d, Receive: %d\n",ackNum, h->seqNum);
+            if(h->seqNum == ackNum){ //Correct Packet
+                sameACK = 0;
+                ackNum = (ackNum + num - HEADLEN + SEQRANGE) % SEQRANGE;
+                total += num - HEADLEN;
+                //printf("%s\n",body);
+                //fprintf(fp, "%s", body);
+                fwrite(body, 1, num - HEADLEN, fp);
+                makeACK(ackPak,ackNum);
+                if (sendto(socket, ackPak, HEADLEN, 0,
+                           (struct sockaddr *)&their_addr, addr_len) == -1){
+                    perror("Send ACK Failed.\n");
+                    exit(1);
+                }
+                //printf("Receive %ld\n",total);
+            } else {
+                sameACK++;
+                printf("duplicate %d\n",sameACK);
+                if (sameACK < 6) { //avoid too many same ACK
+                    if (sendto(socket, ackPak, HEADLEN, 0,
+                               (struct sockaddr *)&their_addr, addr_len) == -1){
+                        perror("Send ACK Failed.\n");
+                        exit(1);
                     }
                 }
-                //ackNum += num - HEADLEN;
-                //printf("rcvbytes: %ld\n",num - HEADLEN);
-                makeACK(ackPak,ackNum);
-                if (ackNum % BUFSIZE == 0) {
-                    //printf("write");
-                    fwrite(rcvbuf, 1, BUFSIZE, fp);
-                }
-                //printf("Right Packet %d\n", ackNum);
             }
-            sendto(socket, ackPak, HEADLEN, 0,
-                     (struct sockaddr *)&their_addr, addr_len);
-
+            
         } else if (num == -1){
             perror("Receive Error.\n");
             break;
         } else if (num == 0) {
-            printf("num0\n");
             break;
         }
     }
@@ -249,15 +254,15 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile){
 
 int main(int argc, char** argv)
 {
-    unsigned short int udpPort;
-    
-    if(argc != 3)
-    {
-        fprintf(stderr, "usage: %s UDP_port filename_to_write\n\n", argv[0]);
-        exit(1);
-    }
-    
-    udpPort = (unsigned short int)atoi(argv[1]);
-    
-    reliablyReceive(udpPort, argv[2]);
+	unsigned short int udpPort;
+	
+	if(argc != 3)
+	{
+		fprintf(stderr, "usage: %s UDP_port filename_to_write\n\n", argv[0]);
+		exit(1);
+	}
+	
+	udpPort = (unsigned short int)atoi(argv[1]);
+	
+	reliablyReceive(udpPort, argv[2]);
 }
